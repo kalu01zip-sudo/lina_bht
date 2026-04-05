@@ -41,6 +41,9 @@ def otp_col():
 def tokens_col():
     return get_db()["refresh_tokens"]
 
+def subscriptions_col():
+    return get_db()["subscriptions"]
+
 
 async def create_indexes():
     """Create MongoDB indexes on startup — safe to run multiple times."""
@@ -64,5 +67,14 @@ async def create_indexes():
         "expires_at",
         expireAfterSeconds=0
     )
+
+    # Apple Sign-In
+    await db.users.create_index("apple_id", sparse=True)
+
+    # Stripe Subscriptions
+    await db.subscriptions.create_index("user_id")
+    await db.subscriptions.create_index("stripe_subscription_id", unique=True, sparse=True)
+    await db.subscriptions.create_index("stripe_customer_id")
+    
 
     print("✅ MongoDB indexes created.")

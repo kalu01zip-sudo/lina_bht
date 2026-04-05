@@ -20,3 +20,9 @@ pydantic[email]>=2.0.0
 python-dotenv>=1.0.0
 routers
 bcrypt==4.0.1
+
+PyJWT>=2.8.0
+cryptography>=42.0.0
+
+# for Payment Integration
+stripe>=8.0.0

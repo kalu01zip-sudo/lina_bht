@@ -37,6 +37,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import create_indexes
 from routers.auth import router as auth_router
 
+from routers.subscription import router as subscription_router
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -52,6 +54,8 @@ app = FastAPI(
     version     = "1.0.0",
     lifespan    = lifespan,
 )
+
+app.include_router(subscription_router)
 
 app.add_middleware(
     CORSMiddleware,

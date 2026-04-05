@@ -79,3 +79,15 @@ class ProfileUpdateRequest(BaseModel):
 class MessageResponse(BaseModel):
     success: bool
     message: str
+
+class AppleAuthRequest(BaseModel):
+    identity_token: str        # JWT from Apple
+    full_name: Optional[str] = None   # only sent on FIRST login
+
+#stripe
+class CreateSubscriptionRequest(BaseModel):
+    plan:             str   # "monthly" | "yearly"
+    payment_method_id: str  # from Stripe.js on frontend e.g. "pm_xxx"
+
+class CancelSubscriptionRequest(BaseModel):
+    reason: Optional[str] = None

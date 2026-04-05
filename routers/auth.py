@@ -42,6 +42,9 @@ from schemas import (
     ProfileUpdateRequest, MessageResponse,
 )
 
+from apple_auth import verify_apple_token
+from schemas import AppleAuthRequest
+
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 bearer = HTTPBearer()
 
@@ -61,6 +64,7 @@ def _fmt(user: dict) -> dict:
         "is_verified":   user.get("is_verified", False),
         "auth_provider": user.get("auth_provider", "email"),
         "avatar_url":    user.get("avatar_url"),
+        "apple_id":      user.get("apple_id"),
         "skin_type":     user.get("skin_type"),
         "hair_type":     user.get("hair_type"),
         "current_phase": user.get("current_phase"),
@@ -68,6 +72,8 @@ def _fmt(user: dict) -> dict:
         "hair_concerns": user.get("hair_concerns", []),
         "allergies":     user.get("allergies", []),
         "created_at":    user.get("created_at", datetime.utcnow()).isoformat(),
+        "plan": user.get("plan", "free"),   # "free" | "premium"
+        "stripe_customer_id": user.get("stripe_customer_id"),
     }
 
 
@@ -349,6 +355,130 @@ async def google_signin(body: GoogleAuthRequest):
         "user":         _fmt(user),
     }
 
+
+# ─────────────────────────────────────────────────
+#  APPLE SIGN-IN / SIGN-UP
+#
+#  Flow (React Native side):
+#    1. User taps "Sign in with Apple"
+#    2. Apple returns identity_token + optional full_name
+#    3. App sends both to POST /auth/apple
+#    4. Backend verifies token with Apple's public keys
+#    5. Creates or finds existing user → returns tokens
+#
+#  ⚠️ Apple only sends full_name on the VERY FIRST login.
+#     Your app must forward it that one time and you must save it.
+# ─────────────────────────────────────────────────
+
+@router.post("/apple")
+async def apple_signin(body: AppleAuthRequest):
+    """
+    Authenticate with Apple Sign-In (mobile).
+
+    React Native setup:
+      npm install @invertase/react-native-apple-authentication
+      const appleAuthRequestResponse = await appleAuth.performRequest({
+        requestedOperation: appleAuth.Operation.LOGIN,
+        requestedScopes: [appleAuth.Scope.EMAIL, appleAuth.Scope.FULL_NAME],
+      })
+      axios.post('/auth/apple', {
+        identity_token: appleAuthRequestResponse.identityToken,
+        full_name: appleAuthRequestResponse.fullName?.givenName + ' ' + 
+                   appleAuthRequestResponse.fullName?.familyName
+      })
+    """
+
+    # ── DEV MOCK ──────────────────────────────────
+    if os.environ.get("MOCK_MODE") == "true":
+        return {
+            "success":     True,
+            "access_token":  "mock-apple-access-token",
+            "refresh_token": "mock-apple-refresh-token",
+            "token_type":    "bearer",
+            "is_new_user":   True,
+            "user": {
+                "id":            "mock-apple-user-id",
+                "email":         "appleuser@privaterelay.appleid.com",
+                "full_name":     body.full_name or "Apple User",
+                "auth_provider": "apple",
+            }
+        }
+    # ──────────────────────────────────────────────
+
+    # Step 1 — Verify token with Apple
+    try:
+        apple_data = await verify_apple_token(body.identity_token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+    apple_id = apple_data.get("sub")       # unique Apple user ID
+    email    = apple_data.get("email")     # may be None on repeat logins
+
+    if not apple_id:
+        raise HTTPException(status_code=400, detail="Could not retrieve Apple account info.")
+
+    # Step 2 — Find existing user by apple_id or email
+    query = {"apple_id": apple_id}
+    if email:
+        query = {"$or": [{"apple_id": apple_id}, {"email": email}]}
+
+    user = await users_col().find_one(query)
+
+    if user:
+        # Update apple_id if signing in via email match
+        update = {
+            "apple_id":      apple_id,
+            "is_verified":   True,
+            "last_login_at": datetime.utcnow(),
+            "updated_at":    datetime.utcnow(),
+        }
+        # Save name only if not already set and Apple sent it
+        if not user.get("full_name") and body.full_name and body.full_name.strip():
+            update["full_name"] = body.full_name.strip()
+
+        await users_col().update_one({"_id": user["_id"]}, {"$set": update})
+        user = await users_col().find_one({"_id": user["_id"]})
+
+    else:
+        # New user — create account
+        if not email:
+            raise HTTPException(
+                status_code=400,
+                detail="Email not provided by Apple. Please try signing in again."
+            )
+
+        result = await users_col().insert_one({
+            "email":           email,
+            "full_name":       body.full_name.strip() if body.full_name else None,
+            "hashed_password": None,
+            "auth_provider":   "apple",
+            "is_verified":     True,       # Apple accounts are pre-verified
+            "is_active":       True,
+            "google_id":       None,
+            "apple_id":        apple_id,   # ← new field
+            "avatar_url":      None,       # Apple doesn't provide avatar
+            "skin_type":       None,
+            "hair_type":       None,
+            "current_phase":   None,
+            "skin_concerns":   [],
+            "hair_concerns":   [],
+            "allergies":       [],
+            "created_at":      datetime.utcnow(),
+            "updated_at":      datetime.utcnow(),
+            "last_login_at":   datetime.utcnow(),
+        })
+        user = await users_col().find_one({"_id": result.inserted_id})
+
+    tok = _tokens(user)
+    await _save_refresh_token(str(user["_id"]), tok["refresh_token"])
+
+    return {
+        "success":      True,
+        **tok,
+        "token_type":   "bearer",
+        "is_new_user":  user.get("auth_provider") == "apple" and not user.get("skin_type"),
+        "user":         _fmt(user),
+    }
 
 # ─────────────────────────────────────────────────
 #  REFRESH TOKEN
