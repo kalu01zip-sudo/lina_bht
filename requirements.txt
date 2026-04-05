@@ -1,24 +1,22 @@
-# SkinSense API — Python dependencies
-# Install: pip install -r requirements.txt
-
-# ── Web server ────────────────────────────────
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
-python-multipart>=0.0.9      # required for file uploads in FastAPI
+python-multipart>=0.0.9
 
-# ── Image processing ──────────────────────────
-pillow>=10.0.0
+# MongoDB
+motor>=3.3.0              # async MongoDB driver
+pymongo>=4.6.0            # sync driver (used by motor internally)
 
-# ── ML / AI models ───────────────────────────
-torch>=2.0.0
-torchvision>=0.15.0
-transformers>=4.40.0
-huggingface_hub>=0.22.0      # FIX: added — used for hf_hub_download + list_repo_files
-ultralytics>=8.0.0           # YOLOv8 (Model 4)
-requests>=2.31.0
-pyzbar
+# Auth
+python-jose[cryptography]>=3.3.0   # JWT
+passlib[bcrypt]>=1.7.4             # bcrypt password hashing
 
-# ── TensorFlow (optional — for Model 2 Keras path) ───
-# If not installed, Model 2 falls back to a pipeline model automatically.
-# Install only if you want native Keras EfficientNetV2B0 support.
-tensorflow>=2.15.0           # FIX: pinned version — unversioned tensorflow can break
+# Google OAuth
+httpx>=0.27.0             # async HTTP client for Google token verify
+
+# Validation
+pydantic[email]>=2.0.0
+
+# Environment
+python-dotenv>=1.0.0
+routers
+bcrypt==4.0.1
