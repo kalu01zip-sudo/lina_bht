@@ -3,6 +3,8 @@ uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
 anthropic
 Pillow
+opencv-python
+pyzbar
 
 # MongoDB
 motor>=3.3.0              # async MongoDB driver

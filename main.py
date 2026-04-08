@@ -3,18 +3,29 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║         SkinSense — Full Backend API  (MongoDB)                 ║
 ║                                                                  ║
-║  Auth:  POST /auth/signup       POST /auth/verify-email         ║
-║         POST /auth/resend-otp   POST /auth/signin               ║
-║         POST /auth/google       POST /auth/refresh              ║
-║         POST /auth/signout      POST /auth/forgot-password      ║
-║         POST /auth/reset-password  POST /auth/change-password   ║
-║         GET  /auth/me           PUT  /auth/me                   ║
+║  Auth:    POST /auth/signup         POST /auth/verify-email     ║
+║           POST /auth/resend-otp     POST /auth/signin           ║
+║           POST /auth/google         POST /auth/refresh          ║
+║           POST /auth/signout        POST /auth/forgot-password  ║
+║           POST /auth/reset-password POST /auth/change-password  ║
+║           GET  /auth/me             PUT  /auth/me               ║
 ║                                                                  ║
-║  Score: POST /score             ← Skin Health Score             ║
+║  Score:   POST /score                                           ║
 ║                                                                  ║
-║  Scan:  POST /scan/face         ← Face skin analysis (Vision)   ║
-║         POST /scan/hair_scalp   ← Hair & scalp analysis (Vision) ║
-║         POST /scan/barcode      ← coming soon                   ║
+║  Scan:    POST /scan/face                                       ║
+║           POST /scan/hair_scalp                                 ║
+║           POST /scan/product                                    ║
+║                                                                  ║
+║  Routine: GET    /routine                                       ║
+║           POST   /routine/step                                  ║
+║           PATCH  /routine/step/{id}                             ║
+║           DELETE /routine/step/{id}                             ║
+║           POST   /routine/step/{id}/complete                    ║
+║           GET    /routine/progress                              ║
+║           POST   /routine/step/{id}/ai-check  (premium only)   ║
+║                                                                  ║
+║  Chat:    POST /chat/message   GET /chat/history                ║
+║           DELETE /chat/history                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 Run:
@@ -28,7 +39,7 @@ Run:
     SMTP_USER=your@gmail.com
     SMTP_PASSWORD=your-app-password
     ANTHROPIC_API_KEY=...
-    MOCK_MODE=false           # set true to skip API calls in development
+    MOCK_MODE=false        # true → skip AI calls, save tokens in dev
 """
 
 import os
@@ -47,18 +58,21 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import create_indexes
-from routers.auth         import router as auth_router
-from routers.subscription import router as subscription_router
-from routers.score        import router as score_router
+from routers.auth            import router as auth_router
+from routers.subscription    import router as subscription_router
+from routers.score           import router as score_router
 from routers.scan_face       import router as scan_face_router
 from routers.scan_hair_scalp import router as scan_hair_scalp_router
+from routers.scan_product    import router as scan_product_router
+from routers.chat            import router as chat_router
+from routers.routine         import router as routine_router       # ← NEW
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_indexes()
     mock = os.getenv("MOCK_MODE", "false").lower() == "true"
-    print(f"🚀 SkinSense API ready.  MOCK_MODE={'ON ⚠️' if mock else 'off'}")
+    print(f"🚀 SkinSense API ready.  MOCK_MODE={'ON ⚠️ ' if mock else 'off'}")
     yield
     print("🛑 Server shutdown.")
 
@@ -82,6 +96,9 @@ app.include_router(subscription_router)
 app.include_router(score_router)
 app.include_router(scan_face_router)
 app.include_router(scan_hair_scalp_router)
+app.include_router(scan_product_router)
+app.include_router(chat_router)
+app.include_router(routine_router)            # ← NEW
 
 
 @app.get("/health", tags=["Status"])

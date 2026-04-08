@@ -75,6 +75,12 @@ async def create_indexes():
     await db.subscriptions.create_index("user_id")
     await db.subscriptions.create_index("stripe_subscription_id", unique=True, sparse=True)
     await db.subscriptions.create_index("stripe_customer_id")
-    
+    await db.chat_messages.create_index("user_id")
+    await db.chat_messages.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+
+    # Routine steps
+    await db.routine_steps.create_index("user_id")
+    await db.routine_steps.create_index([("user_id", ASCENDING), ("time_slot", ASCENDING)])
+    await db.routine_steps.create_index([("user_id", ASCENDING), ("time_slot", ASCENDING), ("order", ASCENDING)])
 
     print("✅ MongoDB indexes created.")
