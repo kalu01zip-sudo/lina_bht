@@ -13,7 +13,7 @@
 ║  Score: POST /score             ← Skin Health Score             ║
 ║                                                                  ║
 ║  Scan:  POST /scan/face         ← Face skin analysis (Vision)   ║
-║         POST /scan/hair_scalp   ← coming soon                   ║
+║         POST /scan/hair_scalp   ← Hair & scalp analysis (Vision) ║
 ║         POST /scan/barcode      ← coming soon                   ║
 ╚══════════════════════════════════════════════════════════════════╝
 
@@ -50,7 +50,8 @@ from database import create_indexes
 from routers.auth         import router as auth_router
 from routers.subscription import router as subscription_router
 from routers.score        import router as score_router
-from routers.scan_face    import router as scan_face_router    # ← NEW
+from routers.scan_face       import router as scan_face_router
+from routers.scan_hair_scalp import router as scan_hair_scalp_router
 
 
 @asynccontextmanager
@@ -79,7 +80,8 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(subscription_router)
 app.include_router(score_router)
-app.include_router(scan_face_router)       # ← NEW
+app.include_router(scan_face_router)
+app.include_router(scan_hair_scalp_router)
 
 
 @app.get("/health", tags=["Status"])
