@@ -45,6 +45,7 @@ from typing import List
 
 import anthropic
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from claude_client import async_vision_call, is_vision_available, USE_LOCAL_LLM
 from PIL import Image
 from pydantic import BaseModel
 
@@ -302,41 +303,27 @@ def _build_content_blocks(encoded: list[tuple[str, str]]) -> list[dict]:
     })
     return blocks
 
-# ── Async Claude call ─────────────────────────────────────────────────────────
+# ── Async vision call ─────────────────────────────────────────────────────────
 
 async def _call_claude_async(encoded: list[tuple[str, str]]) -> HairScalpScanResponse:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise _err(500, "MISSING_API_KEY", "Server misconfiguration: ANTHROPIC_API_KEY is not set.")
-
-    client = anthropic.AsyncAnthropic(api_key=api_key)
-
+    """
+    Calls the vision backend (Anthropic or LM Studio VL) asynchronously.
+    Routes through async_vision_call() from claude_client.
+    """
     try:
-        message = await client.messages.create(
-            model      = "claude-sonnet-4-20250514",
-            max_tokens = 1024,
-            system     = SYSTEM_PROMPT,
-            messages   = [{"role": "user", "content": _build_content_blocks(encoded)}],
+        raw = await async_vision_call(
+            SYSTEM_PROMPT, _build_content_blocks(encoded), max_tokens=1024
         )
-    except anthropic.AuthenticationError:
-        raise _err(500, "INVALID_API_KEY", "Invalid ANTHROPIC_API_KEY.")
-    except anthropic.RateLimitError:
-        raise _err(429, "RATE_LIMITED", "Anthropic rate limit hit. Please retry in a few seconds.")
-    except anthropic.APITimeoutError:
-        raise _err(504, "TIMEOUT", "Anthropic API timed out. Please retry.")
-    except anthropic.APIConnectionError:
-        raise _err(502, "API_UNREACHABLE", "Could not reach the Anthropic API.")
-    except anthropic.APIStatusError as exc:
-        logger.error("Anthropic status error %s: %s", exc.status_code, exc.message)
-        raise _err(502, "API_ERROR", f"Anthropic returned error {exc.status_code}: {exc.message}")
-    except anthropic.APIError as exc:
-        logger.error("Unexpected Anthropic error: %s", exc)
-        raise _err(502, "API_ERROR", str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Vision API error: %s", exc)
+        backend = "LM Studio" if USE_LOCAL_LLM else "Anthropic"
+        hint    = " Is LM Studio running with your VL model loaded?" if USE_LOCAL_LLM else ""
+        raise _err(502, "API_ERROR", f"{backend} error: {exc}.{hint}")
 
-    if not message.content:
-        raise _err(502, "EMPTY_RESPONSE", "Anthropic returned an empty response.")
-
-    raw = message.content[0].text.strip()
+    if not raw:
+        raise _err(422, "EMPTY_RESPONSE", "Vision API returned an empty response.")
 
     if raw.startswith("```"):
         raw = "\n".join(
@@ -459,8 +446,8 @@ async def hair_scalp_scan(
 ) -> HairScalpScanResponse:
 
     # ── Mock mode ─────────────────────────────────────────────────────────────
-    if os.getenv("MOCK_MODE", "false").lower() == "true":
-        logger.info("MOCK_MODE — returning mock hair/scalp scan response.")
+    if os.getenv("MOCK_MODE", "false").lower() == "true" or not is_vision_available():
+        logger.info("MOCK_MODE or USE_LOCAL_LLM — returning mock hair/scalp scan response.")
         return MOCK_RESPONSE
 
     # ── Count check ───────────────────────────────────────────────────────────

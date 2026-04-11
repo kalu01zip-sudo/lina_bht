@@ -40,6 +40,7 @@ from schemas import (
     ChangePasswordRequest, RefreshTokenRequest,
     ResendOTPRequest, GoogleAuthRequest,
     ProfileUpdateRequest, MessageResponse,
+    OnboardingRequest,
 )
 
 from apple_auth import verify_apple_token
@@ -58,22 +59,25 @@ GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 def _fmt(user: dict) -> dict:
     """Format MongoDB user document for API response."""
     return {
-        "id":            str(user["_id"]),
-        "email":         user.get("email", ""),
-        "full_name":     user.get("full_name"),
-        "is_verified":   user.get("is_verified", False),
-        "auth_provider": user.get("auth_provider", "email"),
-        "avatar_url":    user.get("avatar_url"),
-        "apple_id":      user.get("apple_id"),
-        "skin_type":     user.get("skin_type"),
-        "hair_type":     user.get("hair_type"),
-        "current_phase": user.get("current_phase"),
-        "skin_concerns": user.get("skin_concerns", []),
-        "hair_concerns": user.get("hair_concerns", []),
-        "allergies":     user.get("allergies", []),
-        "created_at":    user.get("created_at", datetime.utcnow()).isoformat(),
-        "plan": user.get("plan", "free"),   # "free" | "premium"
-        "stripe_customer_id": user.get("stripe_customer_id"),
+        "id":                   str(user["_id"]),
+        "email":                user.get("email", ""),
+        "full_name":            user.get("full_name"),
+        "is_verified":          user.get("is_verified", False),
+        "auth_provider":        user.get("auth_provider", "email"),
+        "avatar_url":           user.get("avatar_url"),
+        "apple_id":             user.get("apple_id"),
+        # ── Onboarding / skin profile ──────────────────────────────
+        "onboarding_completed": user.get("onboarding_completed", False),
+        "skin_type":            user.get("skin_type"),
+        "hair_type":            user.get("hair_type"),
+        "current_phase":        user.get("current_phase"),
+        "skin_concerns":        user.get("skin_concerns", []),
+        "hair_concerns":        user.get("hair_concerns", []),
+        "allergies":            user.get("allergies", []),
+        "budget":               user.get("budget"),          # budget_friendly | midrange | premium
+        # ──────────────────────────────────────────────────────────
+        "created_at":           user.get("created_at", datetime.utcnow()).isoformat(),
+        "plan":                 user.get("plan", "free"),    # "free" | "premium"
     }
 
 
@@ -126,23 +130,27 @@ async def signup(body: SignUpRequest):
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
 
     result = await users_col().insert_one({
-        "email":           body.email,
-        "full_name":       body.full_name,
-        "hashed_password": hash_password(body.password),
-        "auth_provider":   "email",
-        "is_verified":     False,
-        "is_active":       True,
-        "google_id":       None,
-        "avatar_url":      None,
-        "skin_type":       None,
-        "hair_type":       None,
-        "current_phase":   None,
-        "skin_concerns":   [],
-        "hair_concerns":   [],
-        "allergies":       [],
-        "created_at":      datetime.utcnow(),
-        "updated_at":      datetime.utcnow(),
-        "last_login_at":   None,
+        "email":                body.email,
+        "full_name":            body.full_name,
+        "hashed_password":      hash_password(body.password),
+        "auth_provider":        "email",
+        "is_verified":          False,
+        "is_active":            True,
+        "google_id":            None,
+        "avatar_url":           None,
+        # ── Onboarding fields (filled via POST /auth/onboarding) ──
+        "onboarding_completed": False,
+        "skin_type":            None,
+        "hair_type":            None,
+        "current_phase":        None,
+        "skin_concerns":        [],
+        "hair_concerns":        [],
+        "allergies":            [],
+        "budget":               None,
+        # ──────────────────────────────────────────────────────────
+        "created_at":           datetime.utcnow(),
+        "updated_at":           datetime.utcnow(),
+        "last_login_at":        None,
     })
 
     otp = generate_otp()
@@ -448,24 +456,28 @@ async def apple_signin(body: AppleAuthRequest):
             )
 
         result = await users_col().insert_one({
-            "email":           email,
-            "full_name":       body.full_name.strip() if body.full_name else None,
-            "hashed_password": None,
-            "auth_provider":   "apple",
-            "is_verified":     True,       # Apple accounts are pre-verified
-            "is_active":       True,
-            "google_id":       None,
-            "apple_id":        apple_id,   # ← new field
-            "avatar_url":      None,       # Apple doesn't provide avatar
-            "skin_type":       None,
-            "hair_type":       None,
-            "current_phase":   None,
-            "skin_concerns":   [],
-            "hair_concerns":   [],
-            "allergies":       [],
-            "created_at":      datetime.utcnow(),
-            "updated_at":      datetime.utcnow(),
-            "last_login_at":   datetime.utcnow(),
+            "email":                email,
+            "full_name":            body.full_name.strip() if body.full_name else None,
+            "hashed_password":      None,
+            "auth_provider":        "apple",
+            "is_verified":          True,
+            "is_active":            True,
+            "google_id":            None,
+            "apple_id":             apple_id,
+            "avatar_url":           None,
+            # ── Onboarding fields ──────────────────────────────────
+            "onboarding_completed": False,
+            "skin_type":            None,
+            "hair_type":            None,
+            "current_phase":        None,
+            "skin_concerns":        [],
+            "hair_concerns":        [],
+            "allergies":            [],
+            "budget":               None,
+            # ──────────────────────────────────────────────────────
+            "created_at":           datetime.utcnow(),
+            "updated_at":           datetime.utcnow(),
+            "last_login_at":        datetime.utcnow(),
         })
         user = await users_col().find_one({"_id": result.inserted_id})
 
@@ -629,7 +641,7 @@ async def get_me(current_user: CurrentUser):
 
 @router.put("/me")
 async def update_profile(body: ProfileUpdateRequest, current_user: CurrentUser):
-    """Update the logged-in user's SkinSense profile."""
+    """Update the logged-in user's SkinSense profile (partial update — send only fields to change)."""
     updates = {"updated_at": datetime.utcnow()}
 
     if body.full_name      is not None: updates["full_name"]      = body.full_name
@@ -639,8 +651,61 @@ async def update_profile(body: ProfileUpdateRequest, current_user: CurrentUser):
     if body.skin_concerns  is not None: updates["skin_concerns"]  = body.skin_concerns
     if body.hair_concerns  is not None: updates["hair_concerns"]  = body.hair_concerns
     if body.allergies      is not None: updates["allergies"]      = body.allergies
+    if body.budget         is not None: updates["budget"]         = body.budget
 
     await users_col().update_one({"_id": current_user["_id"]}, {"$set": updates})
     updated = await users_col().find_one({"_id": current_user["_id"]})
 
     return {"success": True, "message": "Profile updated.", "user": _fmt(updated)}
+
+
+# ─────────────────────────────────────────────────
+#  ONBOARDING  (auth required)
+# ─────────────────────────────────────────────────
+
+@router.post("/onboarding")
+async def submit_onboarding(body: OnboardingRequest, current_user: CurrentUser):
+    """
+    Submit onboarding answers after signup. Can be called once or multiple times
+    (re-submitting overwrites previous answers).
+
+    Mobile flow:
+      1. User signs up  →  POST /auth/signup
+      2. User verifies email  →  POST /auth/verify-email
+      3. App shows onboarding screens  →  POST /auth/onboarding
+      4. App checks `onboarding_completed` on GET /auth/me to decide
+         whether to show onboarding or go straight to dashboard.
+
+    Fields:
+      current_phase   : hormonal/life phase (optional — user may skip)
+      has_allergies   : if false, allergies list is saved as []
+      allergies       : list of known allergens
+      skin_type       : primary skin type
+      skin_concerns   : one or more skin concerns
+      hair_type       : hair texture
+      hair_concerns   : one or more hair/scalp concerns
+      budget          : preferred product price range
+    """
+    # If user said no allergies, always store empty list
+    allergies = (body.allergies or []) if body.has_allergies else []
+
+    updates = {
+        "onboarding_completed": True,
+        "current_phase":        body.current_phase,
+        "skin_type":            body.skin_type,
+        "skin_concerns":        body.skin_concerns,
+        "hair_type":            body.hair_type,
+        "hair_concerns":        body.hair_concerns,
+        "allergies":            allergies,
+        "budget":               body.budget,
+        "updated_at":           datetime.utcnow(),
+    }
+
+    await users_col().update_one({"_id": current_user["_id"]}, {"$set": updates})
+    updated = await users_col().find_one({"_id": current_user["_id"]})
+
+    return {
+        "success": True,
+        "message": "Onboarding complete! Your skin profile has been saved.",
+        "user":    _fmt(updated),
+    }

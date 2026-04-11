@@ -13,26 +13,18 @@
 ║   POST   /routine/step/{id}/ai-check    → AI product check      ║
 ║                                           (premium/trial only)  ║
 ╚══════════════════════════════════════════════════════════════════╝
-
-AI Checking:
-  Premium (active) and trial users only — free users get HTTP 403.
-  Returns { "is_good": bool, "reason": str }
-  Frontend shows ✅ when is_good=true, ❌ when is_good=false.
-
-Daily Progress:
-  Completion is per-calendar-day, resets automatically at midnight.
 """
 
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 import os
 import re
 from datetime import date, datetime, timezone
 from typing import Annotated, Literal, Optional
 
-import anthropic
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -40,20 +32,23 @@ from pydantic import BaseModel, Field
 from database import get_db, subscriptions_col
 from routers.auth import _get_current_user
 
+# ── Unified LLM client — works with Anthropic and LM Studio ──────────────────
+from claude_client import ClaudeClient, USE_LOCAL_LLM
+
 logger = logging.getLogger(__name__)
 
-router   = APIRouter(prefix="/routine", tags=["Routine"])
+router      = APIRouter(prefix="/routine", tags=["Routine"])
 CurrentUser = Annotated[dict, Depends(_get_current_user)]
 TimeSlot    = Literal["morning", "night", "weekly"]
+
 
 # ── Subscription gate ─────────────────────────────────────────────────────────
 
 async def _require_premium(user: dict) -> None:
-    """Raises 403 for free users. Allows active (premium) and trialing."""
     sub = await subscriptions_col().find_one(
         {
             "user_id": str(user["_id"]),
-            "status": {"$in": ["active", "trialing"]},
+            "status":  {"$in": ["active", "trialing"]},
         },
         sort=[("created_at", -1)],
     )
@@ -65,6 +60,7 @@ async def _require_premium(user: dict) -> None:
                 "Upgrade or start a free trial to unlock it."
             ),
         )
+
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -113,7 +109,7 @@ def _col():
     return get_db()["routine_steps"]
 
 def _today() -> str:
-    return date.today().isoformat()   # "2026-04-08"
+    return date.today().isoformat()
 
 def _completed_today(doc: dict) -> bool:
     return doc.get("completed_date") == _today()
@@ -135,14 +131,11 @@ def _oid(step_id: str) -> ObjectId:
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid step ID format.")
 
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.get("", response_model=RoutineResponse, summary="Get all routine steps")
 async def get_routine(current_user: CurrentUser):
-    """
-    Returns all steps for the user, grouped into morning / night / weekly.
-    `is_completed` reflects today's status — resets automatically at midnight.
-    """
     user_id = str(current_user["_id"])
     docs    = await _col().find({"user_id": user_id}).sort("order", 1).to_list(200)
 
@@ -158,13 +151,7 @@ async def get_routine(current_user: CurrentUser):
 @router.post("/step", response_model=RoutineStep, status_code=201,
              summary="Add a routine step")
 async def add_step(payload: AddStepRequest, current_user: CurrentUser):
-    """
-    Adds a step to the given time slot. Steps in each slot are ordered
-    by insertion — new steps go to the end of that slot's list.
-    """
     user_id = str(current_user["_id"])
-
-    # Append after the current last step in this slot
     last = await _col().find_one(
         {"user_id": user_id, "time_slot": payload.time_slot},
         sort=[("order", -1)],
@@ -180,7 +167,7 @@ async def add_step(payload: AddStepRequest, current_user: CurrentUser):
         "completed_date": None,
         "created_at":     datetime.now(timezone.utc),
     }
-    result = await _col().insert_one(doc)
+    result  = await _col().insert_one(doc)
     doc["_id"] = result.inserted_id
     return _fmt(doc)
 
@@ -188,7 +175,6 @@ async def add_step(payload: AddStepRequest, current_user: CurrentUser):
 @router.patch("/step/{step_id}", response_model=RoutineStep,
               summary="Edit a routine step")
 async def edit_step(step_id: str, payload: EditStepRequest, current_user: CurrentUser):
-    """Edit product name, instructions, or move to a different time slot."""
     user_id = str(current_user["_id"])
     oid     = _oid(step_id)
 
@@ -197,12 +183,9 @@ async def edit_step(step_id: str, payload: EditStepRequest, current_user: Curren
         raise HTTPException(status_code=404, detail="Step not found.")
 
     updates: dict = {}
-    if payload.product_name is not None:
-        updates["product_name"] = payload.product_name.strip()
-    if payload.instructions is not None:
-        updates["instructions"] = payload.instructions.strip() or None
-    if payload.time_slot is not None:
-        updates["time_slot"] = payload.time_slot
+    if payload.product_name is not None: updates["product_name"] = payload.product_name.strip()
+    if payload.instructions is not None: updates["instructions"] = payload.instructions.strip() or None
+    if payload.time_slot    is not None: updates["time_slot"]    = payload.time_slot
 
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update.")
@@ -215,8 +198,7 @@ async def edit_step(step_id: str, payload: EditStepRequest, current_user: Curren
 async def delete_step(step_id: str, current_user: CurrentUser):
     user_id = str(current_user["_id"])
     oid     = _oid(step_id)
-
-    result = await _col().delete_one({"_id": oid, "user_id": user_id})
+    result  = await _col().delete_one({"_id": oid, "user_id": user_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Step not found.")
     return {"success": True, "deleted_id": step_id}
@@ -225,12 +207,6 @@ async def delete_step(step_id: str, current_user: CurrentUser):
 @router.post("/step/{step_id}/complete", response_model=RoutineStep,
              summary="Toggle today's completion for a step")
 async def toggle_complete(step_id: str, current_user: CurrentUser):
-    """
-    Toggles completion for today.
-    - Not completed today  → marks complete.
-    - Already completed    → unmarks (undo tap).
-    Completion auto-resets the next calendar day.
-    """
     user_id = str(current_user["_id"])
     oid     = _oid(step_id)
 
@@ -248,11 +224,6 @@ async def toggle_complete(step_id: str, current_user: CurrentUser):
 
 @router.get("/progress", summary="Get today's completion progress per time slot")
 async def get_progress(current_user: CurrentUser):
-    """
-    Returns total / completed / percentage for today,
-    broken down by morning, night, and weekly.
-    Used to render the Daily Progress bar on the Routine screen.
-    """
     user_id = str(current_user["_id"])
     today   = _today()
     docs    = await _col().find({"user_id": user_id}).to_list(200)
@@ -270,8 +241,8 @@ async def get_progress(current_user: CurrentUser):
 
     progress = []
     for slot, c in slots.items():
-        t   = c["total"]
-        done= c["completed"]
+        t    = c["total"]
+        done = c["completed"]
         progress.append({
             "time_slot":  slot,
             "total":      t,
@@ -319,7 +290,6 @@ def _build_prompt(product: str, user: dict) -> str:
 
 
 def _parse_ai_response(raw: str) -> AiCheckResponse:
-    """Parse Claude's JSON — strips markdown fences, handles noisy output."""
     clean = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
 
     def _load(text: str) -> dict:
@@ -354,15 +324,16 @@ def _parse_ai_response(raw: str) -> AiCheckResponse:
     summary        = "AI check — is this product right for my skin? (premium/trial only)",
     description    = (
         "**Premium & Trial users only.** Free users receive HTTP 403.\n\n"
-        "Sends the step's product name + user skin profile to Claude.\n\n"
+        "Sends the step's product name + user skin profile to the AI.\n\n"
         "| `is_good` | Frontend display |\n"
         "|-----------|------------------|\n"
         "| `true`    | ✅ green tick    |\n"
-        "| `false`   | ❌ red X         |"
+        "| `false`   | ❌ red X         |\n\n"
+        f"**Active LLM backend:** {'🏠 LM Studio (local)' if USE_LOCAL_LLM else '☁️ Anthropic Claude'}"
     ),
 )
 async def ai_check_step(step_id: str, current_user: CurrentUser):
-    # 1 — Subscription gate (free users blocked here)
+    # 1 — Subscription gate
     await _require_premium(current_user)
 
     # 2 — Load the step
@@ -374,7 +345,7 @@ async def ai_check_step(step_id: str, current_user: CurrentUser):
 
     product = step["product_name"]
 
-    # 3 — Mock mode (saves tokens in development)
+    # 3 — Mock mode
     if os.getenv("MOCK_MODE", "false").lower() == "true":
         logger.info("MOCK_MODE — mock AI check for '%s'", product)
         return AiCheckResponse(
@@ -382,35 +353,21 @@ async def ai_check_step(step_id: str, current_user: CurrentUser):
             reason="This gentle product suits your skin type and concerns perfectly.",
         )
 
-    # 4 — API key check
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured.")
-
-    # 5 — Call Claude
-    client = anthropic.Anthropic(api_key=api_key)
+    # 4 — Call AI via unified client (routes to LM Studio or Anthropic)
+    client = ClaudeClient()
     try:
-        msg = client.messages.create(
-            model      = "claude-sonnet-4-20250514",
-            max_tokens = 128,
-            system     = _AI_SYSTEM,
-            messages   = [{"role": "user", "content": _build_prompt(product, current_user)}],
+        raw = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: client.text(system=_AI_SYSTEM, user=_build_prompt(product, current_user), max_tokens=128),
         )
-    except anthropic.AuthenticationError:
-        raise HTTPException(status_code=500, detail="Invalid ANTHROPIC_API_KEY.")
-    except anthropic.RateLimitError:
-        raise HTTPException(status_code=429, detail="AI rate limit reached. Retry shortly.")
-    except anthropic.APITimeoutError:
-        raise HTTPException(status_code=504, detail="AI request timed out. Please retry.")
-    except anthropic.APIConnectionError:
-        raise HTTPException(status_code=502, detail="Cannot reach the AI service.")
-    except anthropic.APIStatusError as e:
-        raise HTTPException(status_code=502, detail=f"AI API error ({e.status_code}): {e.message}")
-    except anthropic.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Unexpected AI error: {e}")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    except Exception as exc:
+        logger.error("AI check error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"AI error: {exc}")
 
-    # 6 — Parse and return
-    if not msg.content:
+    if not raw:
         raise HTTPException(status_code=502, detail="AI returned an empty response.")
 
-    return _parse_ai_response(msg.content[0].text)
+    # 5 — Parse and return
+    return _parse_ai_response(raw)

@@ -26,7 +26,7 @@ JSON schema (strict):
   "detected_conditions": [
     {
       "condition": "<condition name, 1-3 words>",
-      "detail": "<cause or recommendation, 7-10 words, one line>"
+      "detail": "<cause or recommendation, 7-10 words, one line>",
       "seriousness": "<mild|moderate|severe>"
     }
   ]
@@ -57,7 +57,7 @@ JSON schema (strict):
   "detected_conditions": [
     {
       "condition": "<condition name, 1-3 words>",
-      "detail": "<cause or recommendation, 7-10 words, one line>"
+      "detail": "<cause or recommendation, 7-10 words, one line>",
       "seriousness": "<mild|moderate|severe>"
     }
   ]

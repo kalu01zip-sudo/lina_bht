@@ -71,10 +71,10 @@ async def create_indexes():
     # Apple Sign-In
     await db.users.create_index("apple_id", sparse=True)
 
-    # Stripe Subscriptions
+    # RevenueCat Subscriptions
     await db.subscriptions.create_index("user_id")
-    await db.subscriptions.create_index("stripe_subscription_id", unique=True, sparse=True)
-    await db.subscriptions.create_index("stripe_customer_id")
+    await db.subscriptions.create_index("rc_app_user_id", unique=True, sparse=True)
+    await db.subscriptions.create_index("rc_entitlement_id")
     await db.chat_messages.create_index("user_id")
     await db.chat_messages.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
 

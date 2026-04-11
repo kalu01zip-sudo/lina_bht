@@ -1,32 +1,31 @@
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
-anthropic
 Pillow
 opencv-python
 pyzbar
 
+# LLM backends
+anthropic          # production (Anthropic Claude)
+openai>=1.0.0      # local dev (LM Studio — OpenAI-compatible API)
+
 # MongoDB
-motor>=3.3.0              # async MongoDB driver
-pymongo>=4.6.0            # sync driver (used by motor internally)
+motor>=3.3.0
+pymongo>=4.6.0
 
 # Auth
-python-jose[cryptography]>=3.3.0   # JWT
-passlib[bcrypt]>=1.7.4             # bcrypt password hashing
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
 
-# Google OAuth
-httpx>=0.27.0             # async HTTP client for Google token verify
+# HTTP client
+httpx>=0.27.0
 
 # Validation
 pydantic[email]>=2.0.0
 
 # Environment
 python-dotenv>=1.0.0
-routers
-bcrypt==4.0.1
 
+bcrypt==4.0.1
 PyJWT>=2.8.0
 cryptography>=42.0.0
-
-# for Payment Integration
-stripe>=8.0.0

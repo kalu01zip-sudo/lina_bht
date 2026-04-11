@@ -4,22 +4,26 @@ POST /score
 Returns:
   {
     "Score":           int   [50-90],
-    "note":            str   (7-10 words, Claude-generated),
+    "note":            str   (7-10 words, AI-generated),
     "hydration_score": int   [60-90],
     "acne_risk":       str   low | medium | high,
     "sensitivity":     str   low | medium | high
   }
 
 All numeric values are calculated deterministically in Python.
-Claude is used ONLY to write the one-line personalised note.
+The AI is used ONLY to write the one-line personalised note.
+Works with both Anthropic (production) and LM Studio (local dev).
 """
 
 import os
+import asyncio
 from typing import Optional, List, Literal
 
-import anthropic
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
+# ── Unified LLM client — works with Anthropic and LM Studio ──────────────────
+from claude_client import ClaudeClient
 
 router = APIRouter(prefix="/score", tags=["Skin Health Score"])
 
@@ -51,11 +55,11 @@ class ScoreRequest(BaseModel):
 
 
 class ScoreResponse(BaseModel):
-    Score:           int       = Field(..., ge=50, le=90,  description="Overall skin health score")
-    note:            str       = Field(...,                description="7-10 word personalised tip")
-    hydration_score: int       = Field(..., ge=60, le=90,  description="Skin hydration score")
-    acne_risk:       RiskLevel = Field(...,                description="Acne risk level")
-    sensitivity:     RiskLevel = Field(...,                description="Skin sensitivity level")
+    Score:           int       = Field(..., ge=50, le=90)
+    note:            str       = Field(..., description="7-10 word personalised tip")
+    hydration_score: int       = Field(..., ge=60, le=90)
+    acne_risk:       RiskLevel
+    sensitivity:     RiskLevel
 
 
 # ── Severity tables ───────────────────────────────────────────────────────────
@@ -73,12 +77,11 @@ _HAIR_CONCERN_SEVERITY: dict[str, int] = {
     "oily_scalp": 18,
 }
 
-# ── Sub-score helpers (each returns 0-100) ────────────────────────────────────
+# ── Sub-score helpers ─────────────────────────────────────────────────────────
 
 def _skin_concern_score(concerns: Optional[List[str]]) -> float:
-    if not concerns:
-        return 100.0
-    total = sum(_SKIN_CONCERN_SEVERITY[c] for c in concerns)
+    if not concerns: return 100.0
+    total   = sum(_SKIN_CONCERN_SEVERITY[c] for c in concerns)
     penalty = min(total * 0.85, 70.0)
     return max(30.0, 100.0 - penalty)
 
@@ -91,16 +94,14 @@ def _phase_score(phase: Optional[str]) -> float:
             "menopause": 68.0, "postpartum": 63.0, "pregnant": 60.0}.get(phase, 100.0)
 
 def _allergy_score(allergies: Optional[List[str]]) -> float:
-    if not allergies:
-        return 100.0
-    n = len(allergies)
+    if not allergies: return 100.0
+    n       = len(allergies)
     penalty = 10.0 * (1.0 - 0.7 ** n) / 0.3
     return max(40.0, 100.0 - penalty)
 
 def _hair_score(hair_concerns: Optional[List[str]]) -> float:
-    if not hair_concerns:
-        return 100.0
-    total = sum(_HAIR_CONCERN_SEVERITY[h] for h in hair_concerns)
+    if not hair_concerns: return 100.0
+    total   = sum(_HAIR_CONCERN_SEVERITY[h] for h in hair_concerns)
     penalty = min(total * 0.80, 60.0)
     return max(40.0, 100.0 - penalty)
 
@@ -112,7 +113,7 @@ def _age_score(age: int) -> float:
     elif age <= 55: return 68.0
     else:           return 58.0
 
-# ── Overall Skin Health Score [50-90] ─────────────────────────────────────────
+# ── Overall Score [50-90] ─────────────────────────────────────────────────────
 
 def compute_score(data: ScoreRequest) -> tuple[int, dict]:
     sub_scores = {
@@ -127,39 +128,13 @@ def compute_score(data: ScoreRequest) -> tuple[int, dict]:
         "skin_concern": 0.30, "skin_type": 0.20, "phase": 0.20,
         "allergy": 0.15,      "hair": 0.10,      "age":   0.05,
     }
-    raw = sum(sub_scores[k] * weights[k] for k in weights)
+    raw   = sum(sub_scores[k] * weights[k] for k in weights)
     final = max(50, min(90, round(50.0 + (raw / 100.0) * 40.0)))
     return final, sub_scores
 
 # ── Hydration Score [60-90] ───────────────────────────────────────────────────
 
 def compute_hydration_score(data: ScoreRequest) -> int:
-    """
-    Step 1 — build a raw score (0-100) from skin signals.
-    Step 2 — remap to [60, 90]:
-                hydration = round(60 + (raw / 100) * 30)
-
-    Baseline by skin type (raw):
-        normal=78, oily=70, combination=65, sensitive=55, dry=40
-
-    Deductions applied before remapping:
-        dullness concern         → -12  (dehydrated skin = dull)
-        irritation/redness       → -6   (broken barrier = moisture loss)
-        menopause phase          → -12  (estrogen drop dries skin)
-        postpartum phase         → -8
-        pregnant phase           → -4
-        on_my_period phase       → -5
-        age > 55                 → -15
-        age > 45                 → -10
-        age > 35                 → -5
-        each humectant-blocking  → -2.5 per allergen
-        allergy (fragrance, parabens, phenoxyethanol, alcohol_denat, alcohol)
-
-    Remap guarantees:
-        Perfect raw (100) → 90  (max, flawless hydration)
-        Worst  raw (0)    → 60  (min, still a liveable baseline)
-    """
-    # Step 1 — raw score
     raw = {"dry": 40.0, "sensitive": 55.0, "combination": 65.0,
            "normal": 78.0, "oily": 70.0}.get(data.skin_type, 60.0)
 
@@ -177,62 +152,40 @@ def compute_hydration_score(data: ScoreRequest) -> int:
     hydration_blocking = {"fragrance", "parabens", "phenoxyethanol", "alcohol_denat", "alcohol"}
     raw -= len(hydration_blocking & set(data.allergies or [])) * 2.5
 
-    raw = max(0.0, min(100.0, raw))   # clamp raw to [0, 100]
-
-    # Step 2 — remap [0-100] → [60-90]
+    raw = max(0.0, min(100.0, raw))
     return round(60.0 + (raw / 100.0) * 30.0)
 
-# ── Acne Risk [low | medium | high] ──────────────────────────────────────────
+# ── Acne Risk ─────────────────────────────────────────────────────────────────
 
 def compute_acne_risk(data: ScoreRequest) -> RiskLevel:
-    risk = 0.0
-    risk += {"oily": 40, "combination": 20, "normal": 0,
-             "dry": -5, "sensitive": -5}.get(data.skin_type, 0)
-
+    risk  = {"oily": 40, "combination": 20, "normal": 0, "dry": -5, "sensitive": -5}.get(data.skin_type, 0)
+    risk  = float(risk)
     concerns = data.current_skin_concern or []
     if "acne_pimple"        in concerns: risk += 35.0
     if "irritation_redness" in concerns: risk += 8.0
-
     risk += {None: 0, "none": 0, "on_my_period": 15, "pregnant": 15,
              "postpartum": 10, "menopause": 5}.get(data.current_phase, 0)
-
     if data.age < 25: risk += 10.0
-
-    if data.hair_concern and "oily_scalp" in data.hair_concern:
-        risk += 5.0
-
+    if data.hair_concern and "oily_scalp" in data.hair_concern: risk += 5.0
     pore_clogging = {"parabens", "phenoxyethanol", "alcohol_denat", "oxybenzone", "sulfates"}
     risk += len(pore_clogging & set(data.allergies or [])) * 3.0
+    return "high" if risk >= 55 else "medium" if risk >= 30 else "low"
 
-    if   risk < 30:  return "low"
-    elif risk <= 55: return "medium"
-    else:            return "high"
-
-# ── Sensitivity [low | medium | high] ────────────────────────────────────────
+# ── Sensitivity ───────────────────────────────────────────────────────────────
 
 def compute_sensitivity(data: ScoreRequest) -> RiskLevel:
-    sens = 0.0
-    sens += {"sensitive": 45, "dry": 20, "combination": 5,
-             "normal": 0, "oily": -5}.get(data.skin_type, 0)
-
+    sens  = float({"sensitive": 45, "dry": 20, "combination": 5, "normal": 0, "oily": -5}.get(data.skin_type, 0))
     concerns = data.current_skin_concern or []
     if "irritation_redness" in concerns: sens += 30.0
-
     sens += len(data.allergies or []) * 6.0
-
     reactive = {"retinol", "salicylic_acid", "benzoyl_peroxide", "formaldehyde", "fragrance"}
     sens += len(reactive & set(data.allergies or [])) * 10.0
-
     sens += {None: 0, "none": 0, "postpartum": 15, "pregnant": 12,
              "menopause": 10, "on_my_period": 8}.get(data.current_phase, 0)
-
     if data.age > 45: sens += 8.0
+    return "high" if sens >= 65 else "medium" if sens >= 35 else "low"
 
-    if   sens < 35:  return "low"
-    elif sens <= 65: return "medium"
-    else:            return "high"
-
-# ── Claude note generator ─────────────────────────────────────────────────────
+# ── AI note generator ─────────────────────────────────────────────────────────
 
 def _dominant_factor_label(data: ScoreRequest, sub_scores: dict) -> str:
     worst_key = min(sub_scores, key=sub_scores.get)
@@ -246,16 +199,20 @@ def _dominant_factor_label(data: ScoreRequest, sub_scores: dict) -> str:
     }.get(worst_key, "overall skin health")
 
 
-def _generate_note(
-    data: ScoreRequest,
-    score: int,
-    sub_scores: dict,
-    hydration: int,
-    acne_risk: str,
+async def _generate_note(
+    data:        ScoreRequest,
+    score:       int,
+    sub_scores:  dict,
+    hydration:   int,
+    acne_risk:   str,
     sensitivity: str,
 ) -> str:
+    """
+    Generate a 7-10 word personalised skin tip using the unified LLM client.
+    Runs the sync ClaudeClient in a thread to avoid blocking the event loop.
+    """
     dominant = _dominant_factor_label(data, sub_scores)
-    prompt = (
+    prompt   = (
         f"You are a dermatologist. A {data.age}-year-old female scored:\n"
         f"  Skin health: {score}/90\n"
         f"  Hydration:   {hydration}/90\n"
@@ -266,12 +223,13 @@ def _generate_note(
         "Give a specific, positive, actionable skincare tip targeting her biggest concern.\n"
         "Return ONLY the sentence. No quotes. End with a period."
     )
-    client  = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514", max_tokens=60,
-        messages=[{"role": "user", "content": prompt}],
+
+    client = ClaudeClient()
+    note   = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: client.text(system="", user=prompt, max_tokens=60)
     )
-    return message.content[0].text.strip().strip('"').strip("'")
+    return note.strip().strip('"').strip("'")
+
 
 # ── Route ─────────────────────────────────────────────────────────────────────
 
@@ -280,26 +238,23 @@ async def calculate_score(payload: ScoreRequest):
     """
     Returns a full skin profile:
 
-    | Field             | Type | Range / Values         |
-    |-------------------|------|------------------------|
-    | `Score`           | int  | 50 – 90                |
-    | `note`            | str  | 7-10 word tip (Claude) |
-    | `hydration_score` | int  | 60 – 90                |
-    | `acne_risk`       | str  | low / medium / high    |
-    | `sensitivity`     | str  | low / medium / high    |
+    | Field             | Type | Range / Values             |
+    |-------------------|------|----------------------------|
+    | `Score`           | int  | 50 – 90                    |
+    | `note`            | str  | 7-10 word AI tip           |
+    | `hydration_score` | int  | 60 – 90                    |
+    | `acne_risk`       | str  | low / medium / high        |
+    | `sensitivity`     | str  | low / medium / high        |
     """
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set.")
-
-    score,    sub_scores = compute_score(payload)
-    hydration            = compute_hydration_score(payload)
-    acne_risk            = compute_acne_risk(payload)
-    sensitivity          = compute_sensitivity(payload)
+    score,     sub_scores = compute_score(payload)
+    hydration             = compute_hydration_score(payload)
+    acne_risk             = compute_acne_risk(payload)
+    sensitivity           = compute_sensitivity(payload)
 
     try:
-        note = _generate_note(payload, score, sub_scores, hydration, acne_risk, sensitivity)
-    except anthropic.APIError as exc:
-        raise HTTPException(status_code=502, detail=f"Anthropic API error: {exc}") from exc
+        note = await _generate_note(payload, score, sub_scores, hydration, acne_risk, sensitivity)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI note generation failed: {exc}") from exc
 
     return ScoreResponse(
         Score           = score,

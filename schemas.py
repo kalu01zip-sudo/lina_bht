@@ -1,6 +1,6 @@
 # schemas.py
 import re
-from typing import Optional
+from typing import Optional, List, Literal
 from pydantic import BaseModel, EmailStr, field_validator
 
 
@@ -60,19 +60,76 @@ class GoogleAuthRequest(BaseModel):
     model_config = {"json_schema_extra": {"example": {"id_token": "eyJhbGciOiJSUzI1NiIs..."}}}
 
 # ── Profile ───────────────────────────────────────────────────
-class ProfileUpdateRequest(BaseModel):
-    full_name:      Optional[str]       = None
-    skin_type:      Optional[str]       = None
-    hair_type:      Optional[str]       = None
-    current_phase:  Optional[str]       = None
-    skin_concerns:  Optional[list[str]] = None
-    hair_concerns:  Optional[list[str]] = None
-    allergies:      Optional[list[str]] = None
+
+# Valid onboarding values — shared between OnboardingRequest and ProfileUpdateRequest
+PhaseType        = Literal["on_my_period", "pregnant", "postpartum", "menopause"]
+AllergyType      = Literal[
+    "fragrance", "parabens", "formaldehyde", "phenoxyethanol",
+    "retinol", "salicylic_acid", "benzoyl_peroxide", "alcohol_denat",
+    "oxybenzone", "nickel", "sulfates", "alcohol",
+]
+SkinTypeEnum     = Literal["dry", "combination", "normal", "oily", "sensitive"]
+SkinConcernType  = Literal["acne_pimple", "irritation_redness", "pigmentation", "dullness"]
+HairTypeEnum     = Literal["wavy", "straight", "curly", "coily_kinky"]
+HairConcernType  = Literal["hair_fall", "dandruff", "oily_scalp", "dry_scalp"]
+BudgetType       = Literal["budget_friendly", "midrange", "premium"]
+
+
+class OnboardingRequest(BaseModel):
+    """
+    Submitted once after signup to complete the user's skin/hair profile.
+    All fields are required — the mobile app must collect all answers before submitting.
+
+    current_phase   : hormonal/life phase (optional — user may skip)
+    has_allergies   : true → allergies list is populated; false → allergies = []
+    allergies       : list of known allergens (empty when has_allergies=false)
+    skin_type       : user's primary skin type
+    skin_concerns   : one or more visible skin concerns
+    hair_type       : user's hair texture
+    hair_concerns   : one or more hair/scalp concerns
+    budget          : preferred product price range
+    """
+    current_phase:  Optional[PhaseType]          = None
+    has_allergies:  bool                          = False
+    allergies:      Optional[List[AllergyType]]  = None
+    skin_type:      SkinTypeEnum
+    skin_concerns:  List[SkinConcernType]         = []
+    hair_type:      HairTypeEnum
+    hair_concerns:  List[HairConcernType]         = []
+    budget:         BudgetType                    = "midrange"
 
     model_config = {"json_schema_extra": {"example": {
-        "full_name": "Jane Doe", "skin_type": "oily", "hair_type": "curly",
-        "current_phase": "on_my_period", "skin_concerns": ["acne", "redness"],
-        "hair_concerns": ["dandruff"], "allergies": ["perfumes"],
+        "current_phase":  "on_my_period",
+        "has_allergies":  True,
+        "allergies":      ["fragrance", "parabens"],
+        "skin_type":      "oily",
+        "skin_concerns":  ["acne_pimple", "dullness"],
+        "hair_type":      "curly",
+        "hair_concerns":  ["dandruff", "oily_scalp"],
+        "budget":         "midrange",
+    }}}
+
+
+class ProfileUpdateRequest(BaseModel):
+    """Used by PUT /auth/me — all fields are optional (partial update)."""
+    full_name:      Optional[str]                 = None
+    skin_type:      Optional[SkinTypeEnum]        = None
+    hair_type:      Optional[HairTypeEnum]        = None
+    current_phase:  Optional[PhaseType]           = None
+    skin_concerns:  Optional[List[SkinConcernType]] = None
+    hair_concerns:  Optional[List[HairConcernType]] = None
+    allergies:      Optional[List[AllergyType]]   = None
+    budget:         Optional[BudgetType]          = None
+
+    model_config = {"json_schema_extra": {"example": {
+        "full_name":     "Jane Doe",
+        "skin_type":     "oily",
+        "hair_type":     "curly",
+        "current_phase": "on_my_period",
+        "skin_concerns": ["acne_pimple", "dullness"],
+        "hair_concerns": ["dandruff"],
+        "allergies":     ["fragrance"],
+        "budget":        "midrange",
     }}}
 
 # ── Responses ─────────────────────────────────────────────────
@@ -84,10 +141,15 @@ class AppleAuthRequest(BaseModel):
     identity_token: str        # JWT from Apple
     full_name: Optional[str] = None   # only sent on FIRST login
 
-#stripe
-class CreateSubscriptionRequest(BaseModel):
-    plan:             str   # "monthly" | "yearly"
-    payment_method_id: str  # from Stripe.js on frontend e.g. "pm_xxx"
+# ── RevenueCat Subscription ──────────────────────
+class VerifySubscriptionRequest(BaseModel):
+    """
+    Sent by mobile after a purchase is completed via RevenueCat SDK.
+    app_user_id must equal the MongoDB user _id (set in RC SDK on login).
+    """
+    app_user_id: str
 
 class CancelSubscriptionRequest(BaseModel):
+    """Not used server-side (cancellation is done in the store).
+    Kept for any future admin use."""
     reason: Optional[str] = None
