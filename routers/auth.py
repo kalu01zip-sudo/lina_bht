@@ -53,6 +53,42 @@ GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 
 # ─────────────────────────────────────────────────
+#  REVENUECAT HELPER
+# ─────────────────────────────────────────────────
+
+async def _create_rc_customer(user_id: str):
+    """
+    Silently create a RevenueCat customer right after a new user is created.
+    Uses MongoDB _id as the RC customer ID so the mobile SDK can identify
+    the user on first launch with Purchases.configure(..., appUserID: userId).
+    Non-fatal — signup is never blocked if RC is unreachable.
+    """
+    try:
+        rc_v2_key  = os.getenv("REVENUECAT_V2_API_KEY", "")
+        project_id = os.getenv("REVENUECAT_PROJECT_ID", "")
+
+        if not rc_v2_key or not project_id:
+            print("⚠️  RC not configured — skipping customer creation.")
+            return
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"https://api.revenuecat.com/v2/projects/{project_id}/customers",
+                headers={
+                    "Authorization": f"Bearer {rc_v2_key}",
+                    "Content-Type":  "application/json",
+                },
+                json={"id": user_id},
+            )
+        if resp.status_code in (200, 201):
+            print(f"✅ RC customer created: {user_id}")
+        else:
+            print(f"⚠️  RC customer creation returned {resp.status_code}: {resp.text[:100]}")
+    except Exception as e:
+        print(f"⚠️  RC customer creation failed (non-fatal): {e}")
+
+
+# ─────────────────────────────────────────────────
 #  HELPERS
 # ─────────────────────────────────────────────────
 
@@ -164,6 +200,9 @@ async def signup(body: SignUpRequest):
     })
 
     send_verification_email(body.email, body.full_name or "", otp)
+
+    # ── Auto-create RC customer (non-fatal) ──────────────────────────────────
+    await _create_rc_customer(str(result.inserted_id))
 
     return {
         "success": True,
@@ -352,6 +391,9 @@ async def google_signin(body: GoogleAuthRequest):
         })
         user = await users_col().find_one({"_id": result.inserted_id})
 
+        # ── Auto-create RC customer (non-fatal) ──────────────────────────────
+        await _create_rc_customer(str(result.inserted_id))
+
     tok = _tokens(user)
     await _save_refresh_token(str(user["_id"]), tok["refresh_token"])
 
@@ -480,6 +522,9 @@ async def apple_signin(body: AppleAuthRequest):
             "last_login_at":        datetime.utcnow(),
         })
         user = await users_col().find_one({"_id": result.inserted_id})
+
+        # ── Auto-create RC customer (non-fatal) ──────────────────────────────
+        await _create_rc_customer(str(result.inserted_id))
 
     tok = _tokens(user)
     await _save_refresh_token(str(user["_id"]), tok["refresh_token"])

@@ -73,6 +73,7 @@ from routers.scan_hair_scalp import router as scan_hair_scalp_router
 from routers.scan_product    import router as scan_product_router
 from routers.chat            import router as chat_router
 from routers.routine         import router as routine_router
+from routers.scan_barcode_check import router as scan_barcode_check_router
 
 
 def _llm_label() -> str:
@@ -119,6 +120,7 @@ app.include_router(scan_hair_scalp_router)
 app.include_router(scan_product_router)
 app.include_router(chat_router)
 app.include_router(routine_router)
+app.include_router(scan_barcode_check_router)
 
 
 @app.get("/health", tags=["Status"])

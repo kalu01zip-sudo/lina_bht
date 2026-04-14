@@ -83,4 +83,9 @@ async def create_indexes():
     await db.routine_steps.create_index([("user_id", ASCENDING), ("time_slot", ASCENDING)])
     await db.routine_steps.create_index([("user_id", ASCENDING), ("time_slot", ASCENDING), ("order", ASCENDING)])
 
+    # Scan results — face & hair/scalp history + comparison queries
+    await db.scan_results.create_index("user_id")
+    await db.scan_results.create_index([("user_id", ASCENDING), ("scan_type", ASCENDING)])
+    await db.scan_results.create_index([("user_id", ASCENDING), ("scan_type", ASCENDING), ("scanned_at", DESCENDING)])
+
     print("✅ MongoDB indexes created.")
