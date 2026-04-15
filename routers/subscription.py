@@ -71,8 +71,7 @@ bearer = HTTPBearer()
 RC_V2_API_KEY         = os.environ.get("REVENUECAT_V2_API_KEY", "")
 RC_PROJECT_ID         = os.environ.get("REVENUECAT_PROJECT_ID", "")
 RC_WEBHOOK_AUTH_TOKEN = os.environ.get("REVENUECAT_WEBHOOK_AUTH_TOKEN", "")
-RC_ENTITLEMENT_ID     = os.environ.get("RC_ENTITLEMENT_ID", "premium")
-ADMIN_SECRET          = os.environ.get("ADMIN_SECRET", "")
+RC_ENTITLEMENT_ID     = os.environ.get("RC_ENTITLEMENT_ID", "")
 
 RC_V2_BASE = "https://api.revenuecat.com/v2"
 
@@ -290,29 +289,6 @@ async def _downgrade_to_free(user_id: str, now: datetime) -> None:
     except Exception as exc:
         logger.warning("Could not downgrade user %s: %s", user_id, exc)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  GET /subscription/plans
-#  No auth — called by the paywall screen to display plan options.
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.get("/plans")
-async def get_plans():
-    """
-    Returns plan pricing and trial info. Call this on your paywall screen.
-    No auth required.
-
-    The actual purchase is handled by the RC SDK on mobile — this endpoint
-    is purely for displaying the right prices and labels in the UI.
-    """
-    return {
-        "success":    True,
-        "trial_days": 7,
-        "plans":      list(PLANS.values()),
-        "note":       "Both plans include a 7-day free trial. No charge until the trial ends.",
-    }
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /subscription/verify
 #  Mobile calls this right after the RC SDK reports a successful purchase.
@@ -379,100 +355,15 @@ async def verify_subscription(
 
     return {
         "success":        True,
-        "message":        "Subscription verified and activated.",
+        "message":        "Subscription verified and activated." if not is_trial else "Trial started.",
         "plan":           "premium",
         "plan_type":      plan_type,
-        "status":         "active",
-        "is_trial":       False,
+        "status":         status,
+        "is_trial":       is_trial,
         "expires_at":     expires_dt.isoformat() if expires_dt else None,
         "days_remaining": _days_remaining(expires_dt),
         "will_renew":     True,
     }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  POST /subscription/grant
-#  Admin endpoint — check RC then force-grant premium.
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.post("/grant")
-async def grant_subscription(
-    body:  GrantRequest,
-    _auth: None = Depends(_require_admin),
-):
-    """
-    Admin / support tool. No user JWT needed.
-
-    Pass user_id + entitlement_id → backend calls RC API, verifies it's
-    active, and upgrades the user. Use for:
-      - Support tickets where user paid but didn't get access
-      - Promotional / comp accounts
-      - Testing without going through the store
-
-    Body:   { "user_id": "64abc...", "entitlement_id": "GIXY Premium" }
-    Header: X-Admin-Secret: <ADMIN_SECRET from .env>
-
-    How to find entitlement_id:
-      RC Dashboard → Your Project → Entitlements
-      → copy the "Identifier" column value.
-    """
-    user_id       = body.user_id
-    requested_ent = body.entitlement_id or RC_ENTITLEMENT_ID
-
-    logger.info("🔑 /grant: checking RC for user %s (entitlement: %s)", user_id, requested_ent)
-    entitlements = await _fetch_active_entitlements(user_id)
-
-    if not entitlements:
-        raise HTTPException(
-            status_code=402,
-            detail=(
-                f"No active entitlements found in RevenueCat for user '{user_id}'. "
-                f"The user has not purchased, or the purchase has expired."
-            )
-        )
-
-    active_ids = [e.get("entitlement_id", "") for e in entitlements]
-    logger.info("   RC active IDs: %s | requested: %s", active_ids, requested_ent)
-
-    # Loose match (case-insensitive substring) — accepts both internal IDs and display names
-    matched = next(
-        (e for e in entitlements
-         if requested_ent.lower() in e.get("entitlement_id", "").lower()
-         or e.get("entitlement_id", "").lower() in requested_ent.lower()),
-        entitlements[0],  # fallback: grant if any entitlement is active
-    )
-
-    expires_dt = _ms_to_dt(matched.get("expires_at"))
-    now        = datetime.utcnow()
-    existing   = await subscriptions_col().find_one({"user_id": user_id})
-    plan_type  = existing.get("plan_type", "monthly") if existing else "monthly"
-
-    await _upsert_premium(
-        user_id              = user_id,
-        plan_type            = plan_type,
-        status               = "active",
-        is_trial             = False,
-        will_renew           = True,
-        cancel_at_period_end = False,
-        expires_dt           = expires_dt,
-        rc_entitlement_id    = matched.get("entitlement_id", requested_ent),
-        now                  = now,
-    )
-
-    logger.info("✅ /grant: user %s → premium (expires: %s)", user_id, expires_dt)
-
-    return {
-        "success":                True,
-        "message":                f"User '{user_id}' has been granted premium access.",
-        "user_id":                user_id,
-        "plan":                   "premium",
-        "plan_type":              plan_type,
-        "status":                 "active",
-        "expires_at":             expires_dt.isoformat() if expires_dt else None,
-        "days_remaining":         _days_remaining(expires_dt),
-        "rc_active_entitlements": active_ids,
-    }
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /subscription/status
@@ -532,50 +423,6 @@ async def subscription_status(current_user: dict = Depends(_require_auth)):
         "will_renew":           sub.get("will_renew", False),
         "cancel_at_period_end": sub.get("cancel_at_period_end", False),
         "plan_info":            PLANS.get(plan_type),
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  POST /subscription/cancel
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.post("/cancel")
-async def cancel_subscription(current_user: dict = Depends(_require_auth)):
-    """
-    App Store / Play Store subscriptions can only be cancelled through the store.
-    This endpoint verifies the user has an active sub and returns the store link.
-
-    After the user cancels in the store:
-      RC fires CANCELLATION → cancel_at_period_end = true
-      User keeps access until period/trial ends
-      RC fires EXPIRATION → user downgraded to free automatically
-    """
-    sub = await subscriptions_col().find_one({
-        "user_id": str(current_user["_id"]),
-        "status":  {"$in": ["trialing", "active"]},
-    })
-
-    if not sub:
-        raise HTTPException(
-            status_code=404,
-            detail="No active or trial subscription found."
-        )
-
-    expires_at = sub.get("expires_at")
-
-    return {
-        "success": True,
-        "message": (
-            "To cancel, open your store subscription settings. "
-            "You will keep full access until your current period ends."
-        ),
-        "cancel_links": {
-            "ios":     "https://apps.apple.com/account/subscriptions",
-            "android": "https://play.google.com/store/account/subscriptions",
-        },
-        "plan_type":      sub.get("plan_type"),
-        "expires_at":     expires_at.isoformat() if expires_at else None,
-        "days_remaining": _days_remaining(expires_at),
     }
 
 
