@@ -14,8 +14,20 @@
 ║  Score:   POST /score                                           ║
 ║                                                                  ║
 ║  Scan:    POST /scan/face                                       ║
+║           GET  /scan/face/history                               ║
+║           GET  /scan/face/details/{scan_id}          ← NEW      ║
+║           POST /scan/face/{scan_id}/generate-routine ← NEW      ║
+║                                                                  ║
 ║           POST /scan/hair_scalp                                 ║
-║           POST /scan/product                                    ║
+║           GET  /scan/hair_scalp/history                         ║
+║           GET  /scan/hair_scalp/details/{scan_id}    ← NEW      ║
+║           POST /scan/hair_scalp/{scan_id}/generate-routine ← NEW║
+║                                                                  ║
+║           POST /scan/product                         (+ auth)   ║
+║           GET  /scan/product/history                 ← NEW      ║
+║           POST /scan/product/{scan_id}/generate-routine ← NEW   ║
+║                                                                  ║
+║           POST /scan/barcode-check                              ║
 ║                                                                  ║
 ║  Routine: GET    /routine                                       ║
 ║           POST   /routine/step                                  ║
@@ -65,14 +77,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import create_indexes
-from routers.auth            import router as auth_router
-from routers.subscription    import router as subscription_router
-from routers.score           import router as score_router
-from routers.scan_face       import router as scan_face_router
-from routers.scan_hair_scalp import router as scan_hair_scalp_router
-from routers.scan_product    import router as scan_product_router
-from routers.chat            import router as chat_router
-from routers.routine         import router as routine_router
+from routers.auth               import router as auth_router
+from routers.subscription       import router as subscription_router
+from routers.score              import router as score_router
+from routers.scan_face          import router as scan_face_router
+from routers.scan_hair_scalp    import router as scan_hair_scalp_router
+from routers.scan_product       import router as scan_product_router
+from routers.scan_details       import router as scan_details_router        # ← NEW
+from routers.routine_generate   import router as routine_generate_router    # ← NEW
+from routers.chat               import router as chat_router
+from routers.routine            import router as routine_router
 from routers.scan_barcode_check import router as scan_barcode_check_router
 
 
@@ -101,7 +115,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title       = "SkinSense API",
     description = "Authentication + AI Skin Analysis for SkinSense.",
-    version     = "1.0.0",
+    version     = "1.1.0",
     lifespan    = lifespan,
 )
 
@@ -112,12 +126,23 @@ app.add_middleware(
     allow_headers  = ["*"],
 )
 
+# ── Router registration order matters for OpenAPI path resolution ─────────────
+# Static paths (e.g. /scan/face/history) MUST be registered before routers
+# that define parameterised paths at the same prefix (e.g. /scan/face/{scan_id}/...).
+# scan_face_router and scan_hair_scalp_router register /history (static).
+# scan_details_router registers /details/{scan_id} (parameterised).
+# routine_generate_router registers /{scan_id}/generate-routine (parameterised).
+# These are all under /scan so the order below is safe — FastAPI resolves by
+# router registration order when prefixes overlap.
+
 app.include_router(auth_router)
 app.include_router(subscription_router)
 app.include_router(score_router)
 app.include_router(scan_face_router)
 app.include_router(scan_hair_scalp_router)
 app.include_router(scan_product_router)
+app.include_router(scan_details_router)       # GET /scan/{type}/details/{id}
+app.include_router(routine_generate_router)   # POST /scan/{type}/{id}/generate-routine
 app.include_router(chat_router)
 app.include_router(routine_router)
 app.include_router(scan_barcode_check_router)
@@ -134,41 +159,28 @@ async def health():
     lm_vision = os.getenv("LM_STUDIO_VISION","false").lower() == "true"
 
     return {
-        "status":  "ok",
-        "server":  "SkinSense API v1.0.0",
+        "status": "ok",
+        "server": "SkinSense API v1.1.0",
         "llm": {
-            "backend":       "lm_studio" if use_local else "anthropic",
-            "mock_mode":     mock,
-            "model":         os.getenv("LM_STUDIO_MODEL") if use_local else "claude-sonnet-4-6",
-            "vision":        lm_vision if use_local else True,
-            "label":         _llm_label(),
+            "backend":   "lm_studio" if use_local else "anthropic",
+            "mock_mode": mock,
+            "model":     os.getenv("LM_STUDIO_MODEL") if use_local else "claude-sonnet-4-6",
+            "vision":    lm_vision if use_local else True,
+            "label":     _llm_label(),
         },
     }
+
 
 @app.get("/lm-status", tags=["Status"])
 async def lm_status():
     """
     Checks LM Studio health using its native /api/v0/models endpoint.
-
-    Returns per-model info including:
-    - whether the model is loaded (loaded_instances not empty)
-    - whether it supports vision (capabilities.vision)
-
-    Fields:
-    - `reachable`       → LM Studio server responded
-    - `configured_model`→ LM_STUDIO_MODEL value from .env
-    - `text_ready`      → configured model is loaded and running
-    - `vision_enabled`  → LM_STUDIO_VISION=true in .env
-    - `vision_ready`    → vision enabled AND loaded model supports vision
-    - `models`          → full list of all models with their status
-    - `use_local_llm`   → app is routing calls to LM Studio right now
     """
     use_local   = os.getenv("USE_LOCAL_LLM",    "false").lower() == "true"
     lm_vision   = os.getenv("LM_STUDIO_VISION", "false").lower() == "true"
     lm_base_url = os.getenv("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
     lm_model    = os.getenv("LM_STUDIO_MODEL",    "local-model")
 
-    # Strip /v1 suffix to reach the native LM Studio REST API
     base = lm_base_url.rstrip("/")
     if base.endswith("/v1"):
         base = base[:-3]
@@ -184,18 +196,14 @@ async def lm_status():
             if resp.status_code == 200:
                 reachable  = True
                 raw_models = resp.json().get("models", [])
-
                 for m in raw_models:
-                    model_key     = m.get("key", "")
-                    display_name  = m.get("display_name", model_key)
-                    is_loaded     = len(m.get("loaded_instances", [])) > 0
-                    has_vision    = m.get("capabilities", {}).get("vision", False)
-                    model_type    = m.get("type", "llm")
-
+                    model_key    = m.get("key", "")
+                    is_loaded    = len(m.get("loaded_instances", [])) > 0
+                    has_vision   = m.get("capabilities", {}).get("vision", False)
                     all_models.append({
                         "key":          model_key,
-                        "display_name": display_name,
-                        "type":         model_type,
+                        "display_name": m.get("display_name", model_key),
+                        "type":         m.get("type", "llm"),
                         "loaded":       is_loaded,
                         "vision":       has_vision,
                         "params":       m.get("params_string"),
@@ -210,17 +218,14 @@ async def lm_status():
     except Exception as exc:
         error_detail = f"Unexpected error: {exc}"
 
-    # ── Find the configured model in the list ─────────────────────────────────
     configured = next(
         (m for m in all_models
          if lm_model.lower() in m["key"].lower() or m["key"].lower() in lm_model.lower()),
         None,
     )
-
     text_ready   = bool(configured and configured["loaded"])
     vision_ready = lm_vision and text_ready and bool(configured and configured["vision"])
 
-    # ── Warn if configured model has no vision but VISION=true ────────────────
     vision_warning = None
     if lm_vision and configured and not configured["vision"]:
         vision_warning = (
@@ -228,7 +233,6 @@ async def lm_status():
             f"does not support vision. Set LM_STUDIO_VISION=false or load a VL model."
         )
 
-    # ── Suggest loaded models if configured one is not running ────────────────
     loaded_models = [m for m in all_models if m["loaded"] and m["type"] == "llm"]
     suggestion    = None
     if not text_ready and loaded_models:
@@ -239,17 +243,17 @@ async def lm_status():
         )
 
     return {
-        "use_local_llm":     use_local,
-        "lm_studio_url":     lm_base_url,
-        "reachable":         reachable,
-        "error":             error_detail,
-        "configured_model":  lm_model,
-        "text_ready":        text_ready,
-        "vision_enabled":    lm_vision,
-        "vision_ready":      vision_ready,
-        "vision_warning":    vision_warning,
-        "suggestion":        suggestion,
-        "models":            all_models,
+        "use_local_llm":    use_local,
+        "lm_studio_url":    lm_base_url,
+        "reachable":        reachable,
+        "error":            error_detail,
+        "configured_model": lm_model,
+        "text_ready":       text_ready,
+        "vision_enabled":   lm_vision,
+        "vision_ready":     vision_ready,
+        "vision_warning":   vision_warning,
+        "suggestion":       suggestion,
+        "models":           all_models,
         "hint": (
             None if reachable else
             "Start LM Studio → top menu → Local Server → Start Server"

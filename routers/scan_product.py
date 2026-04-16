@@ -1,6 +1,7 @@
 # routers/scan_product.py
 """
 POST /scan/product
+GET  /scan/product/history
 
 Accepts 1–4 images of a cosmetic product, detects barcodes/QR codes locally,
 enriches the context from Open Beauty Facts, then sends everything to Claude
@@ -11,20 +12,28 @@ Pipeline:
   2. Decode any barcode / QR code found in the images  (pyzbar — optional)
   3. Lookup barcode on Open Beauty Facts API           (httpx async)
   4. Send image(s) + enrichment data to Claude Vision
-  5. Return structured product JSON
+  5. Save result to MongoDB scan_results
+  6. Return structured product JSON with scan_id
+
+Changes from v1:
+  • Auth is now required (Bearer JWT) — needed for routine generation + history.
+  • scan_id is included in the response (MongoDB _id of the saved scan).
+  • GET /scan/product/history endpoint added (newest-first, paginated).
+  • Results saved to scan_results with scan_type="product".
 
 Response shape:
   {
+    "scan_id":          str,
     "product_detected": true,
     "product_name":     str,
     "brand":            str | null,
-    "weight":           str | null,       # e.g. "150 ml", "50 g"
-    "best_use":         str,              # skin type / use case
-    "how_to_apply":     str,              # step-by-step usage
-    "side_effects":     str,              # warnings / known reactions
-    "ingredients":      [str],            # key active ingredients
-    "barcode":          str | null,       # detected barcode value
-    "data_source":      str,              # "vision_only" | "barcode_enriched"
+    "weight":           str | null,
+    "best_use":         str,
+    "how_to_apply":     str,
+    "side_effects":     str,
+    "ingredients":      [str],
+    "barcode":          str | null,
+    "data_source":      str,
     "confidence":       "high"|"medium"|"low"
   }
 
@@ -49,39 +58,57 @@ import io
 import json
 import logging
 import os
-from typing import Any
-from typing import List
+from datetime import datetime, timezone
+from typing import Any, List, Optional
 
-import anthropic
 import httpx
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from claude_client import async_vision_call, is_vision_available, USE_LOCAL_LLM
+from bson import ObjectId
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt as jose_jwt
 from PIL import Image
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
+from claude_client import async_vision_call, is_vision_available, USE_LOCAL_LLM
+from database import get_db
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/scan", tags=["Scan"])
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
+_bearer = HTTPBearer()
+
+
+def _get_current_user_id(
+    creds: HTTPAuthorizationCredentials = Depends(_bearer),
+) -> str:
+    secret = os.getenv("SECRET_KEY", "")
+    try:
+        payload = jose_jwt.decode(creds.credentials, secret, algorithms=["HS256"])
+        uid = payload.get("sub") or payload.get("user_id") or payload.get("id")
+        if not uid:
+            raise ValueError("No user identifier in token")
+        return str(uid)
+    except JWTError as exc:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {exc}")
+
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 MAX_IMAGES       = 4
 MAX_FILE_SIZE_MB = 10
 MAX_FILE_BYTES   = MAX_FILE_SIZE_MB * 1024 * 1024
+BLUR_THRESHOLD   = 80.0
+RESIZE_MAX_PX    = 1024
+JPEG_QUALITY     = 85
 
-# Products are usually shot in normal room light — standard blur threshold
-BLUR_THRESHOLD = 80.0
-
-RESIZE_MAX_PX = 1024
-JPEG_QUALITY  = 85   # slightly higher than skin scans for label readability
-
-# Open Beauty Facts — free, no API key required
-# Falls back to Open Food Facts for non-beauty barcodes
 OPEN_BEAUTY_FACTS_URL  = "https://world.openbeautyfacts.org/api/v2/product/{}.json"
 OPEN_FOOD_FACTS_URL    = "https://world.openfoodfacts.org/api/v2/product/{}.json"
-BARCODE_LOOKUP_TIMEOUT = 6.0   # seconds
+BARCODE_LOOKUP_TIMEOUT = 6.0
 
 # ── Magic-byte sniffing ───────────────────────────────────────────────────────
+
 
 def _sniff_media_type(data: bytes) -> str | None:
     if data[:3] == b"\xff\xd8\xff":
@@ -94,9 +121,11 @@ def _sniff_media_type(data: bytes) -> str | None:
         return "image/webp"
     return None
 
+
 # ── Response schema ───────────────────────────────────────────────────────────
 
 class ProductScanResponse(BaseModel):
+    scan_id:          Optional[str] = None   # MongoDB _id — use for routine generation
     product_detected: bool
     product_name:     str
     brand:            str | None = None
@@ -106,8 +135,20 @@ class ProductScanResponse(BaseModel):
     side_effects:     str
     ingredients:      List[str]  = []
     barcode:          str | None = None
-    data_source:      str        = "vision_only"   # vision_only | barcode_enriched
-    confidence:       str        = "medium"        # high | medium | low
+    data_source:      str        = "vision_only"
+    confidence:       str        = "medium"
+
+
+class ProductHistoryItem(BaseModel):
+    scan_id:      str
+    product_name: str
+    brand:        Optional[str]
+    barcode:      Optional[str]
+    confidence:   str
+    data_source:  str
+    scanned_at:   str
+    is_mock:      bool
+
 
 # ── Mock response ─────────────────────────────────────────────────────────────
 
@@ -143,13 +184,10 @@ MOCK_RESPONSE = ProductScanResponse(
     confidence       = "high",
 )
 
+
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 def _build_system_prompt(barcode_data: dict | None) -> str:
-    """
-    Build the system prompt, optionally injecting enrichment data
-    retrieved from a barcode/QR code lookup.
-    """
     enrichment_block = ""
     if barcode_data:
         enrichment_block = f"""
@@ -209,59 +247,48 @@ Rules:
     ingredients, weight, and exact product name.
 """.strip()
 
+
 # ── Error helper ──────────────────────────────────────────────────────────────
 
 def _err(status: int, code: str, detail: str) -> HTTPException:
-    return HTTPException(
-        status_code = status,
-        detail      = {"code": code, "detail": detail},
-    )
+    return HTTPException(status_code=status, detail={"code": code, "detail": detail})
 
-# ── Blur detection (numpy-based — fast & accurate) ────────────────────────────
+
+# ── Blur detection ─────────────────────────────────────────────────────────────
 
 def _laplacian_variance(image_bytes: bytes) -> float:
-    """
-    Compute Laplacian variance to detect blurry images.
-    Uses numpy if available (fast), falls back to pure-Python (slow but correct).
-    """
     img = Image.open(io.BytesIO(image_bytes)).convert("L")
-
     try:
-        import numpy as np  # type: ignore
-        arr  = np.array(img, dtype=np.float32)
-        lap  = (
+        import numpy as np
+        arr = np.array(img, dtype=np.float32)
+        lap = (
             np.roll(arr, -1, axis=0) + np.roll(arr, 1, axis=0)
             + np.roll(arr, -1, axis=1) + np.roll(arr, 1, axis=1)
             - 4 * arr
         )
         return float(np.var(lap))
     except ImportError:
-        # Pure-Python fallback (samples every 4th pixel for speed)
         w, h   = img.size
         pixels = list(img.getdata())
 
         def px(x: int, y: int) -> int:
-            x = max(0, min(w - 1, x))
-            y = max(0, min(h - 1, y))
-            return pixels[y * w + x]
+            return pixels[max(0, min(h - 1, y)) * w + max(0, min(w - 1, x))]
 
         lap_vals: list[float] = []
         for y in range(0, h, 4):
             for x in range(0, w, 4):
-                val = (px(x, y - 1) + px(x, y + 1)
-                       + px(x - 1, y) + px(x + 1, y)
-                       - 4 * px(x, y))
-                lap_vals.append(float(val))
-
+                lap_vals.append(float(
+                    px(x, y-1) + px(x, y+1) + px(x-1, y) + px(x+1, y) - 4*px(x, y)
+                ))
         n    = len(lap_vals)
         mean = sum(lap_vals) / n
         return sum((v - mean) ** 2 for v in lap_vals) / n
+
 
 # ── Image optimisation ────────────────────────────────────────────────────────
 
 def _optimise_image(image_bytes: bytes, media_type: str) -> tuple[bytes, str]:
     img = Image.open(io.BytesIO(image_bytes))
-
     try:
         from PIL import ImageOps
         img = ImageOps.exif_transpose(img)
@@ -277,9 +304,8 @@ def _optimise_image(image_bytes: bytes, media_type: str) -> tuple[bytes, str]:
         )
 
     if media_type == "image/gif":
-        img = img.convert("RGBA")
         buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
+        img.convert("RGBA").save(buf, format="PNG", optimize=True)
         return buf.getvalue(), "image/png"
 
     if img.mode not in ("RGB", "L"):
@@ -288,20 +314,12 @@ def _optimise_image(image_bytes: bytes, media_type: str) -> tuple[bytes, str]:
     img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
     return buf.getvalue(), "image/jpeg"
 
-# ── Barcode / QR detection ────────────────────────────────────────────────────
+
+# ── Barcode decoding ──────────────────────────────────────────────────────────
 
 def _decode_barcodes(image_bytes: bytes) -> list[str]:
-    """
-    Attempt to decode all barcodes and QR codes in the image using pyzbar.
-    Returns a list of decoded string values (may be empty).
-
-    pyzbar is optional — if not installed this function returns [] silently.
-    Requires system library: apt-get install libzbar0
-    """
     try:
-        # FIX: wrap entire block so any ImportError (e.g. missing libzbar0 / cv2)
-        # is caught gracefully — not just the top-level pyzbar import.
-        from pyzbar import pyzbar  # type: ignore
+        from pyzbar import pyzbar
         img     = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         decoded = pyzbar.decode(img)
         values  = [d.data.decode("utf-8", errors="ignore") for d in decoded if d.data]
@@ -315,13 +333,10 @@ def _decode_barcodes(image_bytes: bytes) -> list[str]:
         logger.warning("Barcode decode error: %s", exc)
         return []
 
+
 # ── Open Beauty Facts lookup ──────────────────────────────────────────────────
 
 async def _fetch_barcode_data(barcode: str) -> dict | None:
-    """
-    Query Open Beauty Facts (then Open Food Facts as fallback) for product data.
-    Returns a cleaned dict of useful fields, or None on failure.
-    """
     async with httpx.AsyncClient(timeout=BARCODE_LOOKUP_TIMEOUT) as client:
         for url_template in (OPEN_BEAUTY_FACTS_URL, OPEN_FOOD_FACTS_URL):
             url = url_template.format(barcode)
@@ -333,18 +348,14 @@ async def _fetch_barcode_data(barcode: str) -> dict | None:
                 if body.get("status") != 1:
                     continue
 
-                p = body.get("product", {})
-
-                # Extract the most useful fields for the prompt
+                p    = body.get("product", {})
                 data: dict[str, Any] = {}
 
-                for key in ("product_name", "brands", "quantity",
-                            "categories", "countries"):
+                for key in ("product_name", "brands", "quantity", "categories", "countries"):
                     val = p.get(key, "")
                     if val:
                         data[key] = val
 
-                # Ingredients
                 ing_text = p.get("ingredients_text_en") or p.get("ingredients_text", "")
                 if ing_text:
                     data["ingredients_text"] = ing_text
@@ -355,15 +366,12 @@ async def _fetch_barcode_data(barcode: str) -> dict | None:
                         i.get("text", "") for i in ing_list[:20] if i.get("text")
                     ]
 
-                # Warnings / labels
-                for key in ("warnings", "conservation_conditions",
-                            "periods_after_opening", "allergens",
-                            "traces", "nutriments"):
+                for key in ("warnings", "conservation_conditions", "periods_after_opening",
+                            "allergens", "traces"):
                     val = p.get(key)
                     if val:
                         data[key] = val
 
-                # Image URLs (for reference only — not sent to Claude)
                 if p.get("image_url"):
                     data["official_image_url"] = p["image_url"]
 
@@ -377,47 +385,33 @@ async def _fetch_barcode_data(barcode: str) -> dict | None:
 
     return None
 
+
 # ── Per-file validation ───────────────────────────────────────────────────────
 
-async def _validate_and_prepare(
-    file: UploadFile,
-    idx: int,
-) -> tuple[bytes, str]:
-    """
-    Validates and returns (raw_bytes, media_type).
-    Raw bytes are kept (not yet base64) so barcode detection can run on them.
-    """
+async def _validate_and_prepare(file: UploadFile, idx: int) -> tuple[bytes, str]:
     label = file.filename or f"image_{idx}"
     data  = await file.read()
 
     if len(data) == 0:
         raise _err(400, "EMPTY_FILE", f"'{label}' is empty.")
-
     if len(data) > MAX_FILE_BYTES:
-        raise _err(
-            400, "FILE_TOO_LARGE",
-            f"'{label}' is {len(data)/1024/1024:.1f} MB — max is {MAX_FILE_SIZE_MB} MB.",
-        )
+        raise _err(400, "FILE_TOO_LARGE",
+                   f"'{label}' is {len(data)/1024/1024:.1f} MB — max is {MAX_FILE_SIZE_MB} MB.")
 
     media_type = _sniff_media_type(data)
     if media_type is None:
-        raise _err(
-            400, "UNSUPPORTED_FORMAT",
-            f"'{label}' is not a recognised image (jpeg/png/webp/gif).",
-        )
+        raise _err(400, "UNSUPPORTED_FORMAT",
+                   f"'{label}' is not a recognised image (jpeg/png/webp/gif).")
 
     variance = await asyncio.to_thread(_laplacian_variance, data)
     logger.debug("'%s' Laplacian variance = %.2f", label, variance)
-
     if variance < BLUR_THRESHOLD:
-        raise _err(
-            400, "BLURRY_IMAGE",
-            f"'{label}' is too blurry (sharpness {variance:.0f} < {BLUR_THRESHOLD:.0f}). "
-            "Please retake the photo in good lighting — the product label must be sharp "
-            "and fully readable.",
-        )
+        raise _err(400, "BLURRY_IMAGE",
+                   f"'{label}' is too blurry (sharpness {variance:.0f} < {BLUR_THRESHOLD:.0f}). "
+                   "Please retake the photo in good lighting — the product label must be sharp.")
 
     return data, media_type
+
 
 # ── Content blocks ────────────────────────────────────────────────────────────
 
@@ -425,10 +419,7 @@ def _build_content_blocks(encoded: list[tuple[str, str]]) -> list[dict]:
     blocks: list[dict] = []
     for i, (b64, media_type) in enumerate(encoded, start=1):
         blocks.append({"type": "text", "text": f"Product image {i} of {len(encoded)}:"})
-        blocks.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": media_type, "data": b64},
-        })
+        blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}})
     blocks.append({
         "type": "text",
         "text": (
@@ -439,17 +430,51 @@ def _build_content_blocks(encoded: list[tuple[str, str]]) -> list[dict]:
     })
     return blocks
 
-# ── Async vision call ─────────────────────────────────────────────────────────
+
+# ── DB save ───────────────────────────────────────────────────────────────────
+
+async def _save_product_scan(
+    user_id:          str,
+    result:           ProductScanResponse,
+    is_mock:          bool = False,
+) -> str:
+    """
+    Persist a product scan result to `scan_results`.
+
+    Fields saved: user_id, scan_type="product", product_name, brand, weight,
+    best_use, how_to_apply, side_effects, ingredients, barcode, data_source,
+    confidence, scanned_at (UTC), is_mock.
+
+    These fields are read back by the routine-generate endpoint when building
+    the Claude prompt for product-based routine generation.
+    """
+    doc = {
+        "user_id":      user_id,
+        "scan_type":    "product",
+        "product_name": result.product_name,
+        "brand":        result.brand,
+        "weight":       result.weight,
+        "best_use":     result.best_use,
+        "how_to_apply": result.how_to_apply,
+        "side_effects": result.side_effects,
+        "ingredients":  result.ingredients,
+        "barcode":      result.barcode,
+        "data_source":  result.data_source,
+        "confidence":   result.confidence,
+        "scanned_at":   datetime.now(timezone.utc),
+        "is_mock":      is_mock,
+    }
+    res = await get_db()["scan_results"].insert_one(doc)
+    return str(res.inserted_id)
+
+
+# ── Claude Vision call ────────────────────────────────────────────────────────
 
 async def _call_claude_async(
     encoded:          list[tuple[str, str]],
     barcode_data:     dict | None,
     detected_barcode: str  | None,
 ) -> ProductScanResponse:
-    """
-    Calls the vision backend (Anthropic or LM Studio VL) asynchronously.
-    Routes through async_vision_call() from claude_client.
-    """
     try:
         raw = await async_vision_call(
             _build_system_prompt(barcode_data), _build_content_blocks(encoded), max_tokens=2048
@@ -476,33 +501,24 @@ async def _call_claude_async(
         logger.error("Claude non-JSON: %s", raw[:400])
         raise _err(422, "MALFORMED_RESPONSE", f"Claude returned malformed JSON: {raw[:200]}")
 
-    # ── Product not detected ──────────────────────────────────────────────────
     if not data.get("product_detected", True):
-        reason = data.get("error_reason", "unknown")
-        detail = data.get("error_detail", "No cosmetic product was detected in the image.")
-        code_map = {
-            "no_product":    "NO_PRODUCT",
-            "not_cosmetic":  "NOT_COSMETIC",
-            "image_unclear": "IMAGE_UNCLEAR",
-        }
+        reason   = data.get("error_reason", "unknown")
+        detail   = data.get("error_detail", "No cosmetic product was detected in the image.")
+        code_map = {"no_product": "NO_PRODUCT", "not_cosmetic": "NOT_COSMETIC",
+                    "image_unclear": "IMAGE_UNCLEAR"}
         raise _err(400, code_map.get(reason, "NO_PRODUCT"), detail)
 
-    # ── Validate required fields ──────────────────────────────────────────────
     missing = [k for k in ("product_name", "best_use", "how_to_apply", "side_effects")
                if not data.get(k)]
     if missing:
         raise _err(422, "MISSING_FIELDS", f"Claude response missing fields: {missing}")
 
-    # ── Normalise confidence ──────────────────────────────────────────────────
     confidence = str(data.get("confidence", "medium")).lower()
     if confidence not in ("high", "medium", "low"):
         confidence = "medium"
-
-    # If we enriched from barcode, bump confidence to at least medium
     if barcode_data and confidence == "low":
         confidence = "medium"
 
-    # ── Resolve barcode: prefer locally decoded over Claude's visual read ─────
     final_barcode = detected_barcode or data.get("barcode") or None
 
     return ProductScanResponse(
@@ -519,7 +535,8 @@ async def _call_claude_async(
         confidence       = confidence,
     )
 
-# ── Route ─────────────────────────────────────────────────────────────────────
+
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/product",
@@ -529,29 +546,25 @@ async def _call_claude_async(
         "Upload 1–4 photos of a cosmetic/personal-care product. "
         "The endpoint reads barcodes/QR codes locally, enriches data from "
         "Open Beauty Facts, then uses Claude Vision to return a full product profile.\n\n"
+        "Results are saved to the database. Use `scan_id` with "
+        "`POST /scan/product/{scan_id}/generate-routine` to build usage steps.\n\n"
         "**Tips for best results:**\n"
         "- Include one clear photo of the front label\n"
-        "- Include one photo of the barcode / ingredients list (back label)\n"
+        "- Include one photo of the barcode / ingredients list\n"
         "- Ensure text on the label is sharp and readable\n\n"
         "**`data_source` field:**\n"
-        "- `vision_only` — product identified by Claude reading the label visually\n"
-        "- `barcode_enriched` — barcode found and matched to Open Beauty Facts database\n\n"
+        "- `vision_only` — identified by Claude reading the label visually\n"
+        "- `barcode_enriched` — barcode matched to Open Beauty Facts database\n\n"
         "**Error codes** in `detail.code`:\n"
-        "- `NO_PRODUCT` — no cosmetic product visible\n"
-        "- `NOT_COSMETIC` — image shows a non-cosmetic item\n"
-        "- `IMAGE_UNCLEAR` — product is too obscured to identify\n"
-        "- `BLURRY_IMAGE` — label unreadable due to blur\n"
-        "- `UNSUPPORTED_FORMAT` — not jpeg/png/webp/gif\n"
-        "- `FILE_TOO_LARGE` — exceeds 10 MB\n\n"
+        "- `NO_PRODUCT` / `NOT_COSMETIC` / `IMAGE_UNCLEAR`\n"
+        "- `BLURRY_IMAGE` / `UNSUPPORTED_FORMAT` / `FILE_TOO_LARGE`\n\n"
         "Set `MOCK_MODE=true` in `.env` to skip all external calls."
     ),
-    responses = {
+    responses={
         400: {"description": "Validation failed or product not detected"},
+        401: {"description": "Missing or invalid JWT"},
         422: {"description": "Claude returned malformed data"},
-        429: {"description": "Anthropic rate limit hit"},
-        500: {"description": "Server misconfiguration"},
-        502: {"description": "Anthropic API error"},
-        504: {"description": "Anthropic API timeout"},
+        502: {"description": "Vision API error"},
     },
     openapi_extra={
         "requestBody": {
@@ -562,14 +575,11 @@ async def _call_claude_async(
                         "required": ["images"],
                         "properties": {
                             "images": {
-                                "type":  "array",
+                                "type": "array",
                                 "items": {"type": "string", "format": "binary"},
                                 "minItems": 1,
                                 "maxItems": 4,
-                                "description": (
-                                    "1–4 product photos. "
-                                    "Include front label + barcode for best results."
-                                ),
+                                "description": "1–4 product photos (jpeg/png/webp/gif, max 10 MB each).",
                             }
                         },
                     }
@@ -580,16 +590,19 @@ async def _call_claude_async(
     },
 )
 async def product_scan(
-    images: List[UploadFile] = File(
-        ...,
-        description="1–4 product photos (jpeg / png / webp / gif, max 10 MB each).",
-    ),
+    images:  List[UploadFile] = File(..., description="1–4 product photos."),
+    user_id: str              = Depends(_get_current_user_id),
 ) -> ProductScanResponse:
 
     # ── Mock mode ─────────────────────────────────────────────────────────────
     if os.getenv("MOCK_MODE", "false").lower() == "true" or not is_vision_available():
-        logger.info("MOCK_MODE or USE_LOCAL_LLM — returning mock product scan response.")
-        return MOCK_RESPONSE
+        logger.info("MOCK_MODE — product scan for user %s", user_id)
+        try:
+            scan_id = await _save_product_scan(user_id, MOCK_RESPONSE, is_mock=True)
+            return MOCK_RESPONSE.model_copy(update={"scan_id": scan_id})
+        except Exception as exc:
+            logger.error("Failed to save mock product scan: %s", exc)
+            return MOCK_RESPONSE
 
     # ── Count check ───────────────────────────────────────────────────────────
     if not images:
@@ -611,24 +624,19 @@ async def product_scan(
         logger.exception("Unexpected error during image preparation")
         raise _err(500, "INTERNAL_ERROR", f"Unexpected error: {exc}")
 
-    # ── Barcode detection (runs on all images, takes first hit) ──────────────
+    # ── Barcode detection ─────────────────────────────────────────────────────
     detected_barcode: str | None = None
     barcode_data:     dict | None = None
 
     for raw_bytes, _ in raw_images:
         codes = await asyncio.to_thread(_decode_barcodes, raw_bytes)
         if codes:
-            detected_barcode = codes[0]   # use first detected code
+            detected_barcode = codes[0]
             logger.info("Using barcode: %s", detected_barcode)
             break
 
-    # ── Barcode lookup (async, non-blocking) ─────────────────────────────────
     if detected_barcode:
         barcode_data = await _fetch_barcode_data(detected_barcode)
-        if barcode_data:
-            logger.info("Enrichment data fetched for barcode %s", detected_barcode)
-        else:
-            logger.info("No enrichment data found for barcode %s", detected_barcode)
 
     # ── Optimise images for Claude ────────────────────────────────────────────
     encoded: list[tuple[str, str]] = []
@@ -638,4 +646,55 @@ async def product_scan(
         encoded.append((b64, opt_type))
 
     # ── Claude Vision ─────────────────────────────────────────────────────────
-    return await _call_claude_async(encoded, barcode_data, detected_barcode)
+    result = await _call_claude_async(encoded, barcode_data, detected_barcode)
+
+    # ── Save to DB ────────────────────────────────────────────────────────────
+    try:
+        scan_id = await _save_product_scan(user_id, result, is_mock=False)
+        result  = result.model_copy(update={"scan_id": scan_id})
+    except Exception as exc:
+        logger.error("Failed to save product scan: %s", exc)
+
+    return result
+
+
+@router.get(
+    "/product/history",
+    response_model = List[ProductHistoryItem],
+    summary        = "Product Scan History",
+    description    = (
+        "Returns the authenticated user's past product scans, newest first.\n\n"
+        "Use `limit` / `skip` for pagination.\n\n"
+        "Use any `scan_id` with `POST /scan/product/{scan_id}/generate-routine` "
+        "to generate routine steps for that product."
+    ),
+)
+async def product_scan_history(
+    user_id: str = Depends(_get_current_user_id),
+    limit:   int = Query(default=20, ge=1, le=100, description="Results to return (max 100)"),
+    skip:    int = Query(default=0,  ge=0,          description="Results to skip for pagination"),
+) -> List[ProductHistoryItem]:
+    db   = get_db()
+    docs = await (
+        db["scan_results"]
+        .find({"user_id": user_id, "scan_type": "product"}, sort=[("scanned_at", -1)])
+        .skip(skip)
+        .limit(limit)
+        .to_list(length=limit)
+    )
+
+    items: list[ProductHistoryItem] = []
+    for doc in docs:
+        scanned_at = doc.get("scanned_at", "")
+        items.append(ProductHistoryItem(
+            scan_id      = str(doc["_id"]),
+            product_name = doc.get("product_name", "Unknown"),
+            brand        = doc.get("brand"),
+            barcode      = doc.get("barcode"),
+            confidence   = doc.get("confidence", "medium"),
+            data_source  = doc.get("data_source", "vision_only"),
+            scanned_at   = scanned_at.isoformat() if isinstance(scanned_at, datetime) else str(scanned_at),
+            is_mock      = doc.get("is_mock", False),
+        ))
+
+    return items

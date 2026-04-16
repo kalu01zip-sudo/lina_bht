@@ -86,7 +86,10 @@ class RoutineStep(BaseModel):
     id:           str
     time_slot:    TimeSlot
     product_name: str
-    instructions: Optional[str]
+    title:        Optional[str]   = None   # AI-generated 2-4 word title
+    bio:          Optional[str]   = None   # AI-generated 10-15 word summary
+    description:  Optional[str]  = None   # AI-generated full HTML content
+    instructions: Optional[str]           = None   # manual/legacy instructions
     order:        int
     is_completed: bool
     created_at:   datetime
@@ -119,6 +122,9 @@ def _fmt(doc: dict) -> RoutineStep:
         id           = str(doc["_id"]),
         time_slot    = doc["time_slot"],
         product_name = doc["product_name"],
+        title        = doc.get("title") or None,
+        bio          = doc.get("bio") or None,
+        description  = doc.get("description") or None,
         instructions = doc.get("instructions"),
         order        = doc.get("order", 0),
         is_completed = _completed_today(doc),
