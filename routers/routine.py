@@ -83,16 +83,17 @@ class EditStepRequest(BaseModel):
 
 
 class RoutineStep(BaseModel):
-    id:           str
-    time_slot:    TimeSlot
-    product_name: str
-    title:        Optional[str]   = None   # AI-generated 2-4 word title
-    bio:          Optional[str]   = None   # AI-generated 10-15 word summary
-    description:  Optional[str]  = None   # AI-generated full HTML content
-    instructions: Optional[str]           = None   # manual/legacy instructions
-    order:        int
-    is_completed: bool
-    created_at:   datetime
+    id:                str
+    time_slot:         TimeSlot
+    product_name:      str
+    title:             Optional[str]  = None   # AI-generated 2-4 word title
+    bio:               Optional[str]  = None   # AI-generated 10-15 word summary
+    description:       Optional[str]  = None   # legacy HTML or structured JSON
+    instructions:      Optional[str]  = None   # manual/legacy instructions
+    product_image_url: Optional[str]  = None   # OBF photo (Source A) or category icon (Source B)
+    order:             int
+    is_completed:      bool
+    created_at:        datetime
 
 
 class RoutineResponse(BaseModel):
@@ -119,16 +120,17 @@ def _completed_today(doc: dict) -> bool:
 
 def _fmt(doc: dict) -> RoutineStep:
     return RoutineStep(
-        id           = str(doc["_id"]),
-        time_slot    = doc["time_slot"],
-        product_name = doc["product_name"],
-        title        = doc.get("title") or None,
-        bio          = doc.get("bio") or None,
-        description  = doc.get("description") or None,
-        instructions = doc.get("instructions"),
-        order        = doc.get("order", 0),
-        is_completed = _completed_today(doc),
-        created_at   = doc["created_at"],
+        id                = str(doc["_id"]),
+        time_slot         = doc["time_slot"],
+        product_name      = doc["product_name"],
+        title             = doc.get("title") or None,
+        bio               = doc.get("bio") or None,
+        description       = doc.get("description") or None,
+        instructions      = doc.get("instructions"),
+        product_image_url = doc.get("product_image_url") or None,
+        order             = doc.get("order", 0),
+        is_completed      = _completed_today(doc),
+        created_at        = doc["created_at"],
     )
 
 def _oid(step_id: str) -> ObjectId:

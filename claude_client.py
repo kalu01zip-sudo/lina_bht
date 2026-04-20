@@ -1,20 +1,20 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║         SkinSense — Unified LLM Client                          ║
+║         SkinSense — Unified LLM Client                           ║
 ║                                                                  ║
-║  Routes all LLM calls to Anthropic (production) or LM Studio   ║
-║  (local dev) based on the USE_LOCAL_LLM env var.                ║
+║  Routes all LLM calls to Anthropic (production) or LM Studio     ║
+║  (local dev) based on the USE_LOCAL_LLM env var.                 ║
 ║                                                                  ║
-║  Text/chat  → both backends                                     ║
-║  Vision     → Anthropic, OR LM Studio if LM_STUDIO_VISION=true ║
-║               (requires a VL model e.g. Qwen2.5 VL 7B)         ║
+║  Text/chat  → both backends                                      ║
+║  Vision     → Anthropic, OR LM Studio if LM_STUDIO_VISION=true   ║
+║               (requires a VL model e.g. Qwen2.5 VL 7B)           ║
 ║                                                                  ║
 ║  .env switches:                                                  ║
-║    USE_LOCAL_LLM=true               → use LM Studio             ║
-║    LM_STUDIO_BASE_URL=http://...    → LM Studio server URL      ║
-║    LM_STUDIO_MODEL=<model name>     → exact name from LM Studio ║
-║    LM_STUDIO_VISION=true            → model supports images     ║
-║                                       (set for VL models only)  ║
+║    USE_LOCAL_LLM=true               → use LM Studio              ║
+║    LM_STUDIO_BASE_URL=http://...    → LM Studio server URL       ║
+║    LM_STUDIO_MODEL=<model name>     → exact name from LM Studio  ║
+║    LM_STUDIO_VISION=true            → model supports images      ║
+║                                       (set for VL models only)   ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 

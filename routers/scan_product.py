@@ -434,35 +434,39 @@ def _build_content_blocks(encoded: list[tuple[str, str]]) -> list[dict]:
 # ── DB save ───────────────────────────────────────────────────────────────────
 
 async def _save_product_scan(
-    user_id:          str,
-    result:           ProductScanResponse,
-    is_mock:          bool = False,
+    user_id:           str,
+    result:            ProductScanResponse,
+    is_mock:           bool = False,
+    product_image_url: str | None = None,
 ) -> str:
     """
     Persist a product scan result to `scan_results`.
 
     Fields saved: user_id, scan_type="product", product_name, brand, weight,
     best_use, how_to_apply, side_effects, ingredients, barcode, data_source,
-    confidence, scanned_at (UTC), is_mock.
+    confidence, product_image_url (from Open Beauty Facts), scanned_at (UTC), is_mock.
 
     These fields are read back by the routine-generate endpoint when building
     the Claude prompt for product-based routine generation.
+    product_image_url is forwarded to routine steps so the frontend can display
+    the real product image next to the step card.
     """
     doc = {
-        "user_id":      user_id,
-        "scan_type":    "product",
-        "product_name": result.product_name,
-        "brand":        result.brand,
-        "weight":       result.weight,
-        "best_use":     result.best_use,
-        "how_to_apply": result.how_to_apply,
-        "side_effects": result.side_effects,
-        "ingredients":  result.ingredients,
-        "barcode":      result.barcode,
-        "data_source":  result.data_source,
-        "confidence":   result.confidence,
-        "scanned_at":   datetime.now(timezone.utc),
-        "is_mock":      is_mock,
+        "user_id":           user_id,
+        "scan_type":         "product",
+        "product_name":      result.product_name,
+        "brand":             result.brand,
+        "weight":            result.weight,
+        "best_use":          result.best_use,
+        "how_to_apply":      result.how_to_apply,
+        "side_effects":      result.side_effects,
+        "ingredients":       result.ingredients,
+        "barcode":           result.barcode,
+        "data_source":       result.data_source,
+        "confidence":        result.confidence,
+        "product_image_url": product_image_url,   # OBF image — null when vision_only
+        "scanned_at":        datetime.now(timezone.utc),
+        "is_mock":           is_mock,
     }
     res = await get_db()["scan_results"].insert_one(doc)
     return str(res.inserted_id)
@@ -598,7 +602,8 @@ async def product_scan(
     if os.getenv("MOCK_MODE", "false").lower() == "true" or not is_vision_available():
         logger.info("MOCK_MODE — product scan for user %s", user_id)
         try:
-            scan_id = await _save_product_scan(user_id, MOCK_RESPONSE, is_mock=True)
+            scan_id = await _save_product_scan(user_id, MOCK_RESPONSE, is_mock=True,
+                                               product_image_url=None)
             return MOCK_RESPONSE.model_copy(update={"scan_id": scan_id})
         except Exception as exc:
             logger.error("Failed to save mock product scan: %s", exc)
@@ -650,7 +655,13 @@ async def product_scan(
 
     # ── Save to DB ────────────────────────────────────────────────────────────
     try:
-        scan_id = await _save_product_scan(user_id, result, is_mock=False)
+        # Extract the product image URL returned by Open Beauty Facts (if any).
+        # barcode_data["official_image_url"] is set in _fetch_barcode_data when
+        # the OBF record includes a front image — null for vision-only scans.
+        product_image_url = (barcode_data or {}).get("official_image_url") or None
+
+        scan_id = await _save_product_scan(user_id, result, is_mock=False,
+                                           product_image_url=product_image_url)
         result  = result.model_copy(update={"scan_id": scan_id})
     except Exception as exc:
         logger.error("Failed to save product scan: %s", exc)

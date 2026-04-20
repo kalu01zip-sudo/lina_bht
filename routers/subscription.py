@@ -339,11 +339,14 @@ async def verify_subscription(
     existing  = await subscriptions_col().find_one({"user_id": user_id})
     plan_type = existing.get("plan_type", "monthly") if existing else "monthly"
 
+    is_trial             = False
+    status               = "active"
+
     await _upsert_premium(
         user_id              = user_id,
         plan_type            = plan_type,
-        status               = "active",
-        is_trial             = False,     # webhook will correct if it's a trial
+        status               = status,
+        is_trial             = is_trial,     # webhook will correct if it's a trial
         will_renew           = True,
         cancel_at_period_end = False,
         expires_dt           = expires_dt,
@@ -355,7 +358,7 @@ async def verify_subscription(
 
     return {
         "success":        True,
-        "message":        "Subscription verified and activated." if not is_trial else "Trial started.",
+        "message":  "Subscription verified and activated." if not is_trial else "Trial started.",
         "plan":           "premium",
         "plan_type":      plan_type,
         "status":         status,
@@ -467,10 +470,9 @@ async def revenuecat_webhook(
     """Handles all RevenueCat subscription lifecycle events automatically."""
 
     # ── 1. Verify shared secret ───────────────────────────────────────────────
-    if RC_WEBHOOK_AUTH_TOKEN:
-        if authorization != f"Bearer {RC_WEBHOOK_AUTH_TOKEN}":
-            logger.warning("❌ Webhook: invalid authorization header")
-            raise HTTPException(status_code=401, detail="Invalid webhook authorization.")
+    if RC_WEBHOOK_AUTH_TOKEN and authorization != RC_WEBHOOK_AUTH_TOKEN:
+        logger.warning("❌ Webhook: invalid authorization header")
+        raise HTTPException(status_code=401, detail="Invalid webhook authorization.")
 
     body  = await request.json()
     event = body.get("event", {})
