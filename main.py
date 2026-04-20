@@ -37,7 +37,9 @@
 ║           GET    /routine/progress                              ║
 ║           POST   /routine/step/{id}/ai-check  (premium only)   ║
 ║                                                                  ║
-║  Chat:    POST /chat/message   GET /chat/history                ║
+║  Chat:    POST /chat/message        → SSE streaming reply       ║
+║           POST /chat/message/sync   → full JSON reply           ║
+║           GET  /chat/history                                    ║
 ║           DELETE /chat/history                                  ║
 ║                                                                  ║
 ║  Subs:    POST /subscription/verify                             ║

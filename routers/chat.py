@@ -4,9 +4,10 @@
 ║         SkinSense — AI Chatbot  (v3 — Full User Context)        ║
 ║                                                                  ║
 ║  Endpoints:                                                      ║
-║   POST /chat/message   → Send a message (SSE streaming reply)   ║
-║   GET  /chat/history   → Get last N messages                    ║
-║   DELETE /chat/history → Clear all chat history                 ║
+║   POST /chat/message      → Send a message (SSE streaming reply)║
+║   POST /chat/message/sync → Send a message (full JSON reply)    ║
+║   GET  /chat/history      → Get last N messages                 ║
+║   DELETE /chat/history    → Clear all chat history              ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 What's new in v3
@@ -112,6 +113,11 @@ class ChatMessage(BaseModel):
 
 class ChatHistoryResponse(BaseModel):
     messages: list[ChatMessage]
+
+
+class ChatSyncResponse(BaseModel):
+    """Returned by POST /chat/message/sync -- the complete reply in one JSON response."""
+    reply: str
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -810,6 +816,61 @@ async def _stream_reply(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  SYNC REPLY COLLECTOR
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _collect_full_reply(
+    user_id:  str,
+    messages: list[dict],
+    system:   str,
+) -> str:
+    """
+    Drives the same async_stream_chat generator used by _stream_reply,
+    but collects every chunk into a single string instead of yielding SSE events.
+
+    Saves the completed assistant message to the DB exactly as _stream_reply does,
+    so chat history is consistent regardless of which endpoint was used.
+
+    Raises HTTPException 502 on any LLM error (mirrors _stream_reply error handling).
+    """
+    chunks: list[str] = []
+
+    try:
+        async for text_chunk in async_stream_chat(system, messages, max_tokens=1024):
+            chunks.append(text_chunk)
+
+    except Exception as exc:
+        logger.error(
+            "LLM sync error (%s): %s",
+            "LM Studio" if USE_LOCAL_LLM else "Anthropic", exc,
+        )
+        exc_str = str(exc).lower()
+        if "connection" in exc_str or "refused" in exc_str:
+            msg = (
+                "Cannot reach LM Studio. "
+                "Make sure LM Studio is running and the Local Server is started."
+                if USE_LOCAL_LLM
+                else "Cannot reach the Anthropic API. Please retry."
+            )
+        elif "api key" in exc_str or "authentication" in exc_str:
+            msg = "Invalid API key." if not USE_LOCAL_LLM else "LM Studio auth error."
+        elif "rate" in exc_str:
+            msg = "Rate limit hit. Please try again shortly."
+        elif "timeout" in exc_str:
+            msg = "Request timed out. Please try again."
+        else:
+            msg = f"AI error: {exc}"
+        raise HTTPException(status_code=502, detail=msg)
+
+    full_text = "".join(chunks)
+
+    if full_text:
+        await _save_message(user_id, "assistant", full_text)
+
+    return full_text
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  ROUTES
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -907,6 +968,81 @@ async def send_message(
             "Access-Control-Allow-Origin": "*",
         },
     )
+
+
+
+@router.post(
+    "/message/sync",
+    response_model = ChatSyncResponse,
+    summary        = "Send a chat message (full JSON reply)",
+    description    = (
+        "Send a message to GIXY. Waits for the complete response and returns it "
+        "as a single JSON object — no streaming, no SSE.\n\n"
+        "**Response shape:**\n"
+        "```json\n"
+        '{"reply": "Full GIXY response text goes here"}\n'
+        "```\n\n"
+        "Identical to `POST /chat/message` in every other way:\n"
+        "- Same 8-layer system prompt (profile, scans, routine, product scans, "
+        "memories, subscription status, profile score)\n"
+        "- Same chat history context (last 20 messages)\n"
+        "- Same memory summariser (fires every 10 user messages)\n"
+        "- Same DB save — the reply is stored in chat_messages so history is consistent\n\n"
+        "Use this endpoint when your client cannot consume SSE streams "
+        "(e.g. REST clients, background jobs, testing).\n\n"
+        f"**Active LLM backend:** {'🏠 LM Studio (local)' if USE_LOCAL_LLM else '☁️ Anthropic Claude'}"
+    ),
+)
+async def send_message_sync(
+    payload: ChatMessageRequest,
+    user_id: str = Depends(_get_current_user_id),
+) -> ChatSyncResponse:
+    user_text = payload.message.strip()
+    if not user_text:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    # ── 1. Save user message ──────────────────────────────────────────────────
+    await _save_message(user_id, "user", user_text)
+
+    # ── 2. Trigger memory summariser (fire-and-forget) ────────────────────────
+    await _maybe_run_summarizer(user_id)
+
+    # ── 3. Fetch ALL context in parallel ──────────────────────────────────────
+    (
+        profile,
+        memories,
+        (face_scan, scalp_scan),
+        history,
+        routine,
+        product_scans,
+        subscription,
+    ) = await asyncio.gather(
+        _get_user_profile(user_id),
+        _get_user_memories(user_id),
+        _get_latest_scans(user_id),
+        _load_history(user_id, limit=20),
+        _get_routine_steps(user_id),
+        _get_product_scans(user_id, limit=3),
+        _get_subscription_status(user_id),
+    )
+
+    profile_score = _compute_profile_score(profile)
+
+    # ── 4. Build enriched system prompt ──────────────────────────────────────
+    system = _build_system_prompt(
+        profile       = profile,
+        memories      = memories,
+        face_scan     = face_scan,
+        scalp_scan    = scalp_scan,
+        routine       = routine,
+        product_scans = product_scans,
+        profile_score = profile_score,
+        subscription  = subscription,
+    )
+
+    # ── 5. Collect the full reply and return as JSON ──────────────────────────
+    reply = await _collect_full_reply(user_id, history, system)
+    return ChatSyncResponse(reply=reply)
 
 
 @router.get(
