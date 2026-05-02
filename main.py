@@ -1,8 +1,8 @@
 # main.py
 """
-╔══════════════════════════════════════════════════════════════════╗
+╔═════════════════════════════════════════════════════════════════╗
 ║         SkinSense — Full Backend API  (MongoDB)                 ║
-║                                                                  ║
+║                                                                 ║
 ║  Auth:    POST /auth/signup         POST /auth/verify-email     ║
 ║           POST /auth/resend-otp     POST /auth/signin           ║
 ║           POST /auth/google         POST /auth/apple            ║
@@ -10,33 +10,33 @@
 ║           POST /auth/forgot-password                            ║
 ║           POST /auth/reset-password POST /auth/change-password  ║
 ║           GET  /auth/me             PUT  /auth/me               ║
-║                                                                  ║
+║                                                                 ║
 ║  Score:   POST /score                                           ║
-║                                                                  ║
+║                                                                 ║
 ║  Scan:    POST /scan/face                                       ║
 ║           GET  /scan/face/history                               ║
 ║           GET  /scan/face/details/{scan_id}          ← NEW      ║
 ║           POST /scan/face/{scan_id}/generate-routine ← NEW      ║
-║                                                                  ║
+║                                                                 ║
 ║           POST /scan/hair_scalp                                 ║
 ║           GET  /scan/hair_scalp/history                         ║
 ║           GET  /scan/hair_scalp/details/{scan_id}    ← NEW      ║
 ║           POST /scan/hair_scalp/{scan_id}/generate-routine ← NEW║
-║                                                                  ║
+║                                                                 ║
 ║           POST /scan/product                         (+ auth)   ║
 ║           GET  /scan/product/history                 ← NEW      ║
 ║           POST /scan/product/{scan_id}/generate-routine ← NEW   ║
-║                                                                  ║
+║                                                                 ║
 ║           POST /scan/barcode-check                              ║
-║                                                                  ║
+║                                                                 ║
 ║  Routine: GET    /routine                                       ║
 ║           POST   /routine/step                                  ║
 ║           PATCH  /routine/step/{id}                             ║
 ║           DELETE /routine/step/{id}                             ║
 ║           POST   /routine/step/{id}/complete                    ║
 ║           GET    /routine/progress                              ║
-║           POST   /routine/step/{id}/ai-check  (premium only)   ║
-║                                                                  ║
+║           POST   /routine/step/{id}/ai-check  (premium only)    ║
+║                                                                 ║
 ║  Admin:   POST /admin/auth/create-first-admin                   ║
 ║           POST /admin/auth/signin                               ║
 ║           POST /admin/auth/forgot-password                      ║
@@ -46,34 +46,34 @@
 ║           POST /admin/auth/refresh                              ║
 ║           POST /admin/auth/signout                              ║
 ║           GET  /admin/auth/me                                   ║
-║                                                                  ║
+║                                                                 ║
 ║  Admin Products (Product Database):                             ║
 ║           GET    /admin/products                  → list        ║
 ║           POST   /admin/products                  → create      ║
 ║           GET    /admin/products/routine-usage    → all routine ║
 ║                                                     products    ║
-║           POST   /admin/products/sync-from-scans  → auto-fill  ║
+║           POST   /admin/products/sync-from-scans  → auto-fill   ║
 ║                                                     from scans  ║
 ║           GET    /admin/products/{id}             → detail      ║
 ║           PUT    /admin/products/{id}             → edit        ║
 ║           DELETE /admin/products/{id}             → delete      ║
 ║           PUT    /admin/products/{id}/image       → set image   ║
-║                                                                  ║
+║                                                                 ║
 ║  Admin Subscription & Revenue:                                  ║
-║           GET   /admin/subscription/overview  → MRR, subs,    ║
-║                                                 churn stats    ║
-║           GET   /admin/subscription/plans     → plan configs   ║
-║           PATCH /admin/subscription/plans/basic               ║
-║           PATCH /admin/subscription/plans/premium             ║
-║                                                                  ║
+║           GET   /admin/subscription/overview  → MRR, subs,      ║
+║                                                 churn stats     ║
+║           GET   /admin/subscription/plans     → plan configs    ║
+║           PATCH /admin/subscription/plans/basic                 ║
+║           PATCH /admin/subscription/plans/premium               ║
+║                                                                 ║
 ║  Chat:    POST /chat/message   GET /chat/history                ║
 ║           DELETE /chat/history                                  ║
-║                                                                  ║
+║                                                                 ║
 ║  Subs:    POST /subscription/verify                             ║
 ║           GET  /subscription/status                             ║
 ║           POST /subscription/cancel                             ║
 ║           POST /subscription/webhook                            ║
-╚══════════════════════════════════════════════════════════════════╝
+╚═════════════════════════════════════════════════════════════════╝
 
 Run:
     uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -105,23 +105,23 @@ logging.basicConfig(
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from database import create_indexes
-from routers.auth               import router as auth_router
-from routers.subscription       import router as subscription_router
-from routers.score              import router as score_router
-from routers.scan_face          import router as scan_face_router
-from routers.scan_hair_scalp    import router as scan_hair_scalp_router
-from routers.scan_product       import router as scan_product_router
-from routers.scan_details       import router as scan_details_router        # ← NEW
-from routers.routine_generate   import router as routine_generate_router    # ← NEW
-from routers.chat               import router as chat_router
-from routers.routine            import router as routine_router
-from routers.scan_barcode_check import router as scan_barcode_check_router
-from routers.admin_auth         import router as admin_auth_router
-from routers.admin_home         import router as admin_home_router
-from routers.admin_products      import router as admin_products_router      # ← NEW
-from routers.admin_subscription  import router as admin_subscription_router  # ← NEW
-from routers.admin_analytics import router as admin_analytics_router
+from app.core.database import create_indexes
+from app.routers.auth               import router as auth_router
+from app.routers.subscription       import router as subscription_router
+from app.routers.score              import router as score_router
+from app.routers.scan_face          import router as scan_face_router
+from app.routers.scan_hair_scalp    import router as scan_hair_scalp_router
+from app.routers.scan_product       import router as scan_product_router
+from app.routers.scan_details       import router as scan_details_router        # ← NEW
+from app.routers.routine_generate   import router as routine_generate_router    # ← NEW
+from app.routers.chat               import router as chat_router
+from app.routers.routine            import router as routine_router
+from app.routers.scan_barcode_check import router as scan_barcode_check_router
+from app.routers.admin_auth         import router as admin_auth_router
+from app.routers.admin_home         import router as admin_home_router
+from app.routers.admin_products      import router as admin_products_router      # ← NEW
+from app.routers.admin_subscription  import router as admin_subscription_router  # ← NEW
+from app.routers.admin_analytics import router as admin_analytics_router
 
 
 def _llm_label() -> str:
