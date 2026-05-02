@@ -1,0 +1,36 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+Pillow
+opencv-python
+pyzbar
+
+# LLM backends
+anthropic          # production (Anthropic Claude)
+openai>=1.0.0      # local dev (LM Studio — OpenAI-compatible API)
+
+# MongoDB
+motor>=3.3.0
+pymongo>=4.6.0
+
+# Auth
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# HTTP client
+httpx>=0.27.0
+
+# Validation
+pydantic[email]>=2.0.0
+
+# Environment
+python-dotenv>=1.0.0
+
+bcrypt==4.0.1
+PyJWT>=2.8.0
+cryptography>=42.0.0
+psutil
+requests
+
+#-------Supabase-------
+supabase>=0.0.1
