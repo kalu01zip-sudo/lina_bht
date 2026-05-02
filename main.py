@@ -31,6 +31,7 @@ from app.routers.admin_products      import router as admin_products_router     
 from app.routers.admin_subscription  import router as admin_subscription_router  # ← NEW
 from app.routers.admin_analytics import router as admin_analytics_router
 from app.routers import onboarding
+from app.routers import admin
 
 def _llm_label() -> str:
     mock      = os.getenv("MOCK_MODE",      "false").lower() == "true"
@@ -85,6 +86,7 @@ app.include_router(admin_products_router)      # CRUD /admin/products/...  ← N
 app.include_router(admin_subscription_router)  # GET/PATCH /admin/subscription/... ← NEW
 app.include_router(admin_analytics_router)
 app.include_router(onboarding.router)
+app.include_router(admin.router)
 
 
 @app.get("/health", tags=["Status"])
