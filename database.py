@@ -2,9 +2,11 @@
 """
 MongoDB async connection using Motor.
 Collections:
-  users          → user accounts
-  otp_codes      → email OTP for verify + reset
-  refresh_tokens → JWT refresh token store
+  users          → mobile app user accounts
+  admins         → admin dashboard accounts (separate from users)
+  otp_codes      → email OTP for verify + reset (shared by users and admins)
+  refresh_tokens → JWT refresh token store (shared by users and admins)
+  products       → admin product database (skincare/haircare products)
 """
 
 import os
@@ -43,6 +45,15 @@ def tokens_col():
 
 def subscriptions_col():
     return get_db()["subscriptions"]
+
+def admins_col():
+    return get_db()["admins"]
+
+def products_col():
+    return get_db()["products"]
+
+def plan_config_col():
+    return get_db()["plan_config"]
 
 
 async def create_indexes():
@@ -87,5 +98,24 @@ async def create_indexes():
     await db.scan_results.create_index("user_id")
     await db.scan_results.create_index([("user_id", ASCENDING), ("scan_type", ASCENDING)])
     await db.scan_results.create_index([("user_id", ASCENDING), ("scan_type", ASCENDING), ("scanned_at", DESCENDING)])
+
+    # Admin accounts — unique email index
+    await db.admins.create_index("email", unique=True)
+
+    # ── Products collection (admin product database) ───────────────────────────
+    # Fast lookup by barcode (unique, sparse — allows multiple null barcodes)
+    await db.products.create_index("barcode", unique=True, sparse=True)
+    # Text + case-insensitive search on name and brand
+    await db.products.create_index([("name", ASCENDING)])
+    await db.products.create_index([("brand", ASCENDING)])
+    # Filter by status (active/inactive)
+    await db.products.create_index("status")
+    # Filter products with no image — compound for fast admin queries
+    await db.products.create_index([("image_url", ASCENDING), ("status", ASCENDING)])
+
+    # ── plan_config collection (admin-editable plan limits & pricing) ────────────
+    # _id is "basic" or "premium" — already unique as the primary key.
+    # Index on plan_type for any future multi-tier lookups.
+    await db.plan_config.create_index("plan_type", unique=True, sparse=True)
 
     print("✅ MongoDB indexes created.")

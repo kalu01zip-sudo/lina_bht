@@ -37,9 +37,36 @@
 ║           GET    /routine/progress                              ║
 ║           POST   /routine/step/{id}/ai-check  (premium only)   ║
 ║                                                                  ║
-║  Chat:    POST /chat/message        → SSE streaming reply       ║
-║           POST /chat/message/sync   → full JSON reply           ║
-║           GET  /chat/history                                    ║
+║  Admin:   POST /admin/auth/create-first-admin                   ║
+║           POST /admin/auth/signin                               ║
+║           POST /admin/auth/forgot-password                      ║
+║           POST /admin/auth/verify-otp                           ║
+║           POST /admin/auth/reset-password                       ║
+║           POST /admin/auth/change-password                      ║
+║           POST /admin/auth/refresh                              ║
+║           POST /admin/auth/signout                              ║
+║           GET  /admin/auth/me                                   ║
+║                                                                  ║
+║  Admin Products (Product Database):                             ║
+║           GET    /admin/products                  → list        ║
+║           POST   /admin/products                  → create      ║
+║           GET    /admin/products/routine-usage    → all routine ║
+║                                                     products    ║
+║           POST   /admin/products/sync-from-scans  → auto-fill  ║
+║                                                     from scans  ║
+║           GET    /admin/products/{id}             → detail      ║
+║           PUT    /admin/products/{id}             → edit        ║
+║           DELETE /admin/products/{id}             → delete      ║
+║           PUT    /admin/products/{id}/image       → set image   ║
+║                                                                  ║
+║  Admin Subscription & Revenue:                                  ║
+║           GET   /admin/subscription/overview  → MRR, subs,    ║
+║                                                 churn stats    ║
+║           GET   /admin/subscription/plans     → plan configs   ║
+║           PATCH /admin/subscription/plans/basic               ║
+║           PATCH /admin/subscription/plans/premium             ║
+║                                                                  ║
+║  Chat:    POST /chat/message   GET /chat/history                ║
 ║           DELETE /chat/history                                  ║
 ║                                                                  ║
 ║  Subs:    POST /subscription/verify                             ║
@@ -90,6 +117,11 @@ from routers.routine_generate   import router as routine_generate_router    # �
 from routers.chat               import router as chat_router
 from routers.routine            import router as routine_router
 from routers.scan_barcode_check import router as scan_barcode_check_router
+from routers.admin_auth         import router as admin_auth_router
+from routers.admin_home         import router as admin_home_router
+from routers.admin_products      import router as admin_products_router      # ← NEW
+from routers.admin_subscription  import router as admin_subscription_router  # ← NEW
+from routers.admin_analytics import router as admin_analytics_router
 
 
 def _llm_label() -> str:
@@ -117,7 +149,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title       = "SkinSense API",
     description = "Authentication + AI Skin Analysis for SkinSense.",
-    version     = "1.1.0",
+    version     = "1.2.0",
     lifespan    = lifespan,
 )
 
@@ -136,6 +168,10 @@ app.add_middleware(
 # routine_generate_router registers /{scan_id}/generate-routine (parameterised).
 # These are all under /scan so the order below is safe — FastAPI resolves by
 # router registration order when prefixes overlap.
+#
+# For /admin/products: static paths (routine-usage, sync-from-scans) are
+# defined BEFORE /{product_id} in admin_products.py, so FastAPI will resolve
+# them correctly.
 
 app.include_router(auth_router)
 app.include_router(subscription_router)
@@ -148,7 +184,11 @@ app.include_router(routine_generate_router)   # POST /scan/{type}/{id}/generate-
 app.include_router(chat_router)
 app.include_router(routine_router)
 app.include_router(scan_barcode_check_router)
-
+app.include_router(admin_auth_router)          # POST /admin/auth/...
+app.include_router(admin_home_router)          # GET  /admin/home/...
+app.include_router(admin_products_router)      # CRUD /admin/products/...  ← NEW
+app.include_router(admin_subscription_router)  # GET/PATCH /admin/subscription/... ← NEW
+app.include_router(admin_analytics_router)
 
 @app.get("/health", tags=["Status"])
 async def health():
@@ -162,7 +202,7 @@ async def health():
 
     return {
         "status": "ok",
-        "server": "SkinSense API v1.1.0",
+        "server": "SkinSense API v1.2.0",
         "llm": {
             "backend":   "lm_studio" if use_local else "anthropic",
             "mock_mode": mock,
