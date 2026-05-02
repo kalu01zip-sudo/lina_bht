@@ -1,94 +1,3 @@
-# main.py
-"""
-╔═════════════════════════════════════════════════════════════════╗
-║         SkinSense — Full Backend API  (MongoDB)                 ║
-║                                                                 ║
-║  Auth:    POST /auth/signup         POST /auth/verify-email     ║
-║           POST /auth/resend-otp     POST /auth/signin           ║
-║           POST /auth/google         POST /auth/apple            ║
-║           POST /auth/refresh        POST /auth/signout          ║
-║           POST /auth/forgot-password                            ║
-║           POST /auth/reset-password POST /auth/change-password  ║
-║           GET  /auth/me             PUT  /auth/me               ║
-║                                                                 ║
-║  Score:   POST /score                                           ║
-║                                                                 ║
-║  Scan:    POST /scan/face                                       ║
-║           GET  /scan/face/history                               ║
-║           GET  /scan/face/details/{scan_id}          ← NEW      ║
-║           POST /scan/face/{scan_id}/generate-routine ← NEW      ║
-║                                                                 ║
-║           POST /scan/hair_scalp                                 ║
-║           GET  /scan/hair_scalp/history                         ║
-║           GET  /scan/hair_scalp/details/{scan_id}    ← NEW      ║
-║           POST /scan/hair_scalp/{scan_id}/generate-routine ← NEW║
-║                                                                 ║
-║           POST /scan/product                         (+ auth)   ║
-║           GET  /scan/product/history                 ← NEW      ║
-║           POST /scan/product/{scan_id}/generate-routine ← NEW   ║
-║                                                                 ║
-║           POST /scan/barcode-check                              ║
-║                                                                 ║
-║  Routine: GET    /routine                                       ║
-║           POST   /routine/step                                  ║
-║           PATCH  /routine/step/{id}                             ║
-║           DELETE /routine/step/{id}                             ║
-║           POST   /routine/step/{id}/complete                    ║
-║           GET    /routine/progress                              ║
-║           POST   /routine/step/{id}/ai-check  (premium only)    ║
-║                                                                 ║
-║  Admin:   POST /admin/auth/create-first-admin                   ║
-║           POST /admin/auth/signin                               ║
-║           POST /admin/auth/forgot-password                      ║
-║           POST /admin/auth/verify-otp                           ║
-║           POST /admin/auth/reset-password                       ║
-║           POST /admin/auth/change-password                      ║
-║           POST /admin/auth/refresh                              ║
-║           POST /admin/auth/signout                              ║
-║           GET  /admin/auth/me                                   ║
-║                                                                 ║
-║  Admin Products (Product Database):                             ║
-║           GET    /admin/products                  → list        ║
-║           POST   /admin/products                  → create      ║
-║           GET    /admin/products/routine-usage    → all routine ║
-║                                                     products    ║
-║           POST   /admin/products/sync-from-scans  → auto-fill   ║
-║                                                     from scans  ║
-║           GET    /admin/products/{id}             → detail      ║
-║           PUT    /admin/products/{id}             → edit        ║
-║           DELETE /admin/products/{id}             → delete      ║
-║           PUT    /admin/products/{id}/image       → set image   ║
-║                                                                 ║
-║  Admin Subscription & Revenue:                                  ║
-║           GET   /admin/subscription/overview  → MRR, subs,      ║
-║                                                 churn stats     ║
-║           GET   /admin/subscription/plans     → plan configs    ║
-║           PATCH /admin/subscription/plans/basic                 ║
-║           PATCH /admin/subscription/plans/premium               ║
-║                                                                 ║
-║  Chat:    POST /chat/message   GET /chat/history                ║
-║           DELETE /chat/history                                  ║
-║                                                                 ║
-║  Subs:    POST /subscription/verify                             ║
-║           GET  /subscription/status                             ║
-║           POST /subscription/cancel                             ║
-║           POST /subscription/webhook                            ║
-╚═════════════════════════════════════════════════════════════════╝
-
-Run:
-    uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-
-.env required:
-    MONGO_URL, DB_NAME, SECRET_KEY, REFRESH_SECRET_KEY
-    SMTP_USER, SMTP_PASSWORD
-    USE_LOCAL_LLM=false          # true  → LM Studio (no API key needed)
-    ANTHROPIC_API_KEY=...        # needed when USE_LOCAL_LLM=false
-    LM_STUDIO_BASE_URL=http://localhost:1234/v1
-    LM_STUDIO_MODEL=<model name from LM Studio UI>
-    LM_STUDIO_VISION=true        # set only for VL models (e.g. Qwen2.5 VL 7B)
-    MOCK_MODE=false              # true → skip all AI calls (fastest for UI dev)
-"""
-
 import os
 import logging
 from contextlib import asynccontextmanager
@@ -104,7 +13,6 @@ logging.basicConfig(
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from app.core.database import create_indexes
 from app.routers.auth               import router as auth_router
 from app.routers.subscription       import router as subscription_router
@@ -122,7 +30,7 @@ from app.routers.admin_home         import router as admin_home_router
 from app.routers.admin_products      import router as admin_products_router      # ← NEW
 from app.routers.admin_subscription  import router as admin_subscription_router  # ← NEW
 from app.routers.admin_analytics import router as admin_analytics_router
-
+from app.routers import onboarding
 
 def _llm_label() -> str:
     mock      = os.getenv("MOCK_MODE",      "false").lower() == "true"
@@ -160,19 +68,6 @@ app.add_middleware(
     allow_headers  = ["*"],
 )
 
-# ── Router registration order matters for OpenAPI path resolution ─────────────
-# Static paths (e.g. /scan/face/history) MUST be registered before routers
-# that define parameterised paths at the same prefix (e.g. /scan/face/{scan_id}/...).
-# scan_face_router and scan_hair_scalp_router register /history (static).
-# scan_details_router registers /details/{scan_id} (parameterised).
-# routine_generate_router registers /{scan_id}/generate-routine (parameterised).
-# These are all under /scan so the order below is safe — FastAPI resolves by
-# router registration order when prefixes overlap.
-#
-# For /admin/products: static paths (routine-usage, sync-from-scans) are
-# defined BEFORE /{product_id} in admin_products.py, so FastAPI will resolve
-# them correctly.
-
 app.include_router(auth_router)
 app.include_router(subscription_router)
 app.include_router(score_router)
@@ -189,6 +84,8 @@ app.include_router(admin_home_router)          # GET  /admin/home/...
 app.include_router(admin_products_router)      # CRUD /admin/products/...  ← NEW
 app.include_router(admin_subscription_router)  # GET/PATCH /admin/subscription/... ← NEW
 app.include_router(admin_analytics_router)
+app.include_router(onboarding.router)
+
 
 @app.get("/health", tags=["Status"])
 async def health():

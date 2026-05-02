@@ -16,6 +16,26 @@ from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+security = HTTPBearer()
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    token = credentials.credentials
+
+    payload = decode_access_token(token)
+
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token"
+        )
+
+    return payload
+
 # ── Config (set in .env) ──────────────────────────────────────
 SECRET_KEY           = os.environ.get("SECRET_KEY",           "change-me-in-production")
 REFRESH_SECRET_KEY   = os.environ.get("REFRESH_SECRET_KEY",   "change-refresh-secret")

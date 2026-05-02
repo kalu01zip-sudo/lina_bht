@@ -13,7 +13,7 @@ import os
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ASCENDING, DESCENDING
 
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+MONGO_URL = os.environ.get("MONGO_URL")
 DB_NAME   = os.environ.get("DB_NAME",   "skinsense")
 
 _client: AsyncIOMotorClient = None
