@@ -133,6 +133,8 @@ cheeks, nose, forehead, chin, under_eye
 9. prognosis_timeline scores represent expected change in that area (positive means improvement, negative means worsening), Show the difference in score, not the final score.
 
 10. Hydration target is the amoount of water intake (in ml) recommended to reach optimal skin hydration based on the analysis.
+
+11. Detected conditions MUST be chosen ONLY from this list: acne, blackheads, whiteheads, pores, oiliness, dryness, dehydration, redness, irritation, sensitivity, pigmentation, dark_spots, uneven_tone, dullness, dark_circles, eye_bags, fine_lines, wrinkles, loss_of_elasticity, sun_damage. Return exactly 3 items using exact names only.
 """
 
     # ✅ BUILD CONTENT

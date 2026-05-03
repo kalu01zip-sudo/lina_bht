@@ -3,9 +3,11 @@ from typing import Annotated, List
 from app.services.face_validation import validate_image
 from app.services.face_ai import analyze_face_with_claude
 import json
+from app.core.mapping import extract_nutrition
+from app.core.mapping import extract_nutrition
+from app.services.nutrition_service import fetch_nutritions
 
 router = APIRouter(prefix="/scan", tags=["Face Scan"])
-
 
 @router.post("/face")
 async def upload_face_images(files: List[UploadFile] = File(...)):
@@ -58,4 +60,14 @@ async def upload_face_images(files: List[UploadFile] = File(...)):
         print("AI ERROR:", str(e))
         raise HTTPException(500, f"AI failed: {str(e)}")
 
-    return ai_data
+    nutrition_ids = extract_nutrition(ai_data)
+
+    nutrition_data = fetch_nutritions(nutrition_ids)
+
+    print("AI CONDITIONS:", ai_data["detected_condition"])
+    print("MAPPED NUTRITION IDS:", nutrition_ids)
+
+    return {
+        "analysis": ai_data,
+        "nutritions": nutrition_data
+    }
