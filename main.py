@@ -16,22 +16,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.database import create_indexes
 from app.routers.auth               import router as auth_router
 from app.routers.subscription       import router as subscription_router
-from app.routers.score              import router as score_router
-from app.routers.scan_face          import router as scan_face_router
-from app.routers.scan_hair_scalp    import router as scan_hair_scalp_router
-from app.routers.scan_product       import router as scan_product_router
-from app.routers.scan_details       import router as scan_details_router        # ← NEW
-from app.routers.routine_generate   import router as routine_generate_router    # ← NEW
+# from app.routers.score              import router as score_router
+# from app.routers.scan_face          import router as scan_face_router
+# from app.routers.scan_hair_scalp    import router as scan_hair_scalp_router
+# from app.routers.scan_product       import router as scan_product_router
+from app.routers.scan_details       import router as scan_details_router        
+from app.routers.routine_generate   import router as routine_generate_router    
 from app.routers.chat               import router as chat_router
 from app.routers.routine            import router as routine_router
 from app.routers.scan_barcode_check import router as scan_barcode_check_router
 from app.routers.admin_auth         import router as admin_auth_router
 from app.routers.admin_home         import router as admin_home_router
-from app.routers.admin_products      import router as admin_products_router      # ← NEW
-from app.routers.admin_subscription  import router as admin_subscription_router  # ← NEW
+from app.routers.admin_products      import router as admin_products_router      
+from app.routers.admin_subscription  import router as admin_subscription_router  
 from app.routers.admin_analytics import router as admin_analytics_router
 from app.routers import onboarding
-from app.routers import admin
+from app.routers import admin, scan
 
 def _llm_label() -> str:
     mock      = os.getenv("MOCK_MODE",      "false").lower() == "true"
@@ -70,24 +70,24 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
-app.include_router(subscription_router)
-app.include_router(score_router)
-app.include_router(scan_face_router)
-app.include_router(scan_hair_scalp_router)
-app.include_router(scan_product_router)
-app.include_router(scan_details_router)       # GET /scan/{type}/details/{id}
-app.include_router(routine_generate_router)   # POST /scan/{type}/{id}/generate-routine
+# app.include_router(subscription_router)
+# app.include_router(score_router)
+# app.include_router(scan_face_router)
+# app.include_router(scan_hair_scalp_router)
+# app.include_router(scan_product_router)
+app.include_router(scan_details_router)       
+app.include_router(routine_generate_router)   
 app.include_router(chat_router)
 app.include_router(routine_router)
 app.include_router(scan_barcode_check_router)
-app.include_router(admin_auth_router)          # POST /admin/auth/...
-app.include_router(admin_home_router)          # GET  /admin/home/...
-app.include_router(admin_products_router)      # CRUD /admin/products/...  ← NEW
-app.include_router(admin_subscription_router)  # GET/PATCH /admin/subscription/... ← NEW
+app.include_router(admin_auth_router)          
+app.include_router(admin_home_router)          
+app.include_router(admin_products_router)      
+app.include_router(admin_subscription_router)  
 app.include_router(admin_analytics_router)
 app.include_router(onboarding.router)
 app.include_router(admin.router)
-
+app.include_router(scan.router)
 
 @app.get("/health", tags=["Status"])
 async def health():

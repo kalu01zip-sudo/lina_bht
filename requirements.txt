@@ -4,6 +4,10 @@ python-multipart>=0.0.9
 Pillow
 opencv-python
 pyzbar
+opencv-python
+numpy
+mediapipe==0.10.9
+
 
 # LLM backends
 anthropic          # production (Anthropic Claude)
