@@ -7,6 +7,7 @@ pyzbar
 opencv-python
 numpy
 mediapipe==0.10.9
+pillow
 
 
 # LLM backends
