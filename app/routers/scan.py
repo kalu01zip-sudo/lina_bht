@@ -6,11 +6,23 @@ import json
 from app.core.mapping import extract_nutrition
 from app.core.mapping import extract_nutrition
 from app.services.nutrition_service import fetch_nutritions
+from app.services.food_service import fetch_foods_by_tags
+from app.services.recipe_service import fetch_recipes_by_tags
+from app.core.recommender import smart_rank
+from app.services.scan_storage import save_scan_result
+from app.services.scan_history import get_scan_history, get_scan_by_id
+from fastapi import HTTPException
+from app.routers.auth import CurrentUser
+from app.services.image_storage import upload_scan_image
 
 router = APIRouter(prefix="/scan", tags=["Face Scan"])
 
 @router.post("/face")
-async def upload_face_images(files: List[UploadFile] = File(...)):
+async def upload_face_images(
+    files: list[UploadFile],
+    current_user: CurrentUser 
+):
+    user_id = str(current_user["_id"])
     
     if len(files) != 5:
         raise HTTPException(400, "Exactly 5 images required")
@@ -52,6 +64,13 @@ async def upload_face_images(files: List[UploadFile] = File(...)):
                 "errors": errors
             }
         )
+    
+    uploaded_image_urls = []
+
+    for img in valid_images:   
+        url = await upload_scan_image(img, str(current_user["_id"]))
+        if url:
+            uploaded_image_urls.append(url)
 
     # Call Claude 
     try:
@@ -63,11 +82,55 @@ async def upload_face_images(files: List[UploadFile] = File(...)):
     nutrition_ids = extract_nutrition(ai_data)
 
     nutrition_data = fetch_nutritions(nutrition_ids)
+    raw_foods = fetch_foods_by_tags(nutrition_ids)
+    raw_recipes = fetch_recipes_by_tags(nutrition_ids)
 
-    print("AI CONDITIONS:", ai_data["detected_condition"])
-    print("MAPPED NUTRITION IDS:", nutrition_ids)
+    food_data = smart_rank(raw_foods, nutrition_ids, ai_data)
+    recipe_data = smart_rank(raw_recipes, nutrition_ids, ai_data)
+
+    # print("🔍 NUTRITION IDS:", nutrition_ids)
+    print("🔍 RECIPES RESULT:", recipe_data)
+    print("🔍 RECIPES COUNT:", len(recipe_data))
+
+    # print("AI CONDITIONS:", ai_data["detected_condition"])
+    # print("MAPPED NUTRITION IDS:", nutrition_ids)
+
+    scan_id = save_scan_result(str(current_user["_id"]), {
+        "analysis": ai_data,
+        "nutritions": nutrition_data,
+        "foods": food_data,
+        "recipes": recipe_data,
+        "images": uploaded_image_urls 
+    })
 
     return {
+        "scan_id": scan_id,
         "analysis": ai_data,
-        "nutritions": nutrition_data
+        "nutritions": nutrition_data,
+        "foods": food_data,
+        "recipes": recipe_data
     }
+
+@router.get("/history")
+async def scan_history(current_user: CurrentUser):
+    user_id = str(current_user["_id"])
+
+    data = get_scan_history(user_id)
+
+    return {
+        "total": len(data),
+        "scans": data
+    }
+
+@router.get("/{scan_id}")
+async def scan_detail(scan_id: str, current_user: CurrentUser):
+    data = get_scan_by_id(scan_id)
+
+    if not data:
+        raise HTTPException(404, "Scan not found")
+
+    # 🔥 SECURITY CHECK
+    if data["user_id"] != str(current_user["_id"]):
+        raise HTTPException(403, "Not allowed")
+
+    return data
