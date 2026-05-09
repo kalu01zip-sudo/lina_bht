@@ -37,6 +37,7 @@ from app.routers import face_routine
 from app.routers import saved_routine
 from app.routers import routine_detail
 from app.routers import admin_video
+from app.routers import profile
 
 
 def _llm_label() -> str:
@@ -76,6 +77,8 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(onboarding.router)
+app.include_router(profile.router)
 # app.include_router(subscription_router)
 # app.include_router(score_router)
 # app.include_router(scan_face_router)
@@ -91,7 +94,7 @@ app.include_router(admin_home_router)
 # app.include_router(admin_products_router)      
 app.include_router(admin_subscription_router)  
 app.include_router(admin_analytics_router)
-app.include_router(onboarding.router)
+
 app.include_router(admin.router)
 app.include_router(scan.router)
 app.include_router(admin_product.router)

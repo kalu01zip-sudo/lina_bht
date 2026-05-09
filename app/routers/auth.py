@@ -684,73 +684,102 @@ async def get_me(current_user: CurrentUser):
 #  UPDATE PROFILE  (auth required)
 # ─────────────────────────────────────────────────
 
-@router.put("/me")
-async def update_profile(body: ProfileUpdateRequest, current_user: CurrentUser):
-    """Update the logged-in user's SkinSense profile (partial update — send only fields to change)."""
-    updates = {"updated_at": datetime.utcnow()}
+# @router.put("/me")
+# async def update_profile(body: ProfileUpdateRequest, current_user: CurrentUser):
+#     """Update the logged-in user's SkinSense profile (partial update — send only fields to change)."""
+#     updates = {"updated_at": datetime.utcnow()}
 
-    if body.full_name      is not None: updates["full_name"]      = body.full_name
-    if body.skin_type      is not None: updates["skin_type"]      = body.skin_type
-    if body.hair_type      is not None: updates["hair_type"]      = body.hair_type
-    if body.current_phase  is not None: updates["current_phase"]  = body.current_phase
-    if body.skin_concerns  is not None: updates["skin_concerns"]  = body.skin_concerns
-    if body.hair_concerns  is not None: updates["hair_concerns"]  = body.hair_concerns
-    if body.allergies      is not None: updates["allergies"]      = body.allergies
-    if body.budget         is not None: updates["budget"]         = body.budget
+#     if body.full_name      is not None: updates["full_name"]      = body.full_name
+#     if body.skin_type      is not None: updates["skin_type"]      = body.skin_type
+#     if body.hair_type      is not None: updates["hair_type"]      = body.hair_type
+#     if body.current_phase  is not None: updates["current_phase"]  = body.current_phase
+#     if body.skin_concerns  is not None: updates["skin_concerns"]  = body.skin_concerns
+#     if body.hair_concerns  is not None: updates["hair_concerns"]  = body.hair_concerns
+#     if body.allergies      is not None: updates["allergies"]      = body.allergies
+#     if body.budget         is not None: updates["budget"]         = body.budget
 
-    await users_col().update_one({"_id": current_user["_id"]}, {"$set": updates})
-    updated = await users_col().find_one({"_id": current_user["_id"]})
+#     await users_col().update_one({"_id": current_user["_id"]}, {"$set": updates})
+#     updated = await users_col().find_one({"_id": current_user["_id"]})
 
-    return {"success": True, "message": "Profile updated.", "user": _fmt(updated)}
+#     return {"success": True, "message": "Profile updated.", "user": _fmt(updated)}
 
 
 # ─────────────────────────────────────────────────
 #  ONBOARDING  (auth required)
 # ─────────────────────────────────────────────────
 
-@router.post("/onboarding")
-async def submit_onboarding(body: OnboardingRequest, current_user: CurrentUser):
+# @router.post("/onboarding")
+# async def submit_onboarding(body: OnboardingRequest, current_user: CurrentUser):
+#     """
+#     Submit onboarding answers after signup. Can be called once or multiple times
+#     (re-submitting overwrites previous answers).
+
+#     Mobile flow:
+#       1. User signs up  →  POST /auth/signup
+#       2. User verifies email  →  POST /auth/verify-email
+#       3. App shows onboarding screens  →  POST /auth/onboarding
+#       4. App checks `onboarding_completed` on GET /auth/me to decide
+#          whether to show onboarding or go straight to dashboard.
+
+#     Fields:
+#       current_phase   : hormonal/life phase (optional — user may skip)
+#       has_allergies   : if false, allergies list is saved as []
+#       allergies       : list of known allergens
+#       skin_type       : primary skin type
+#       skin_concerns   : one or more skin concerns
+#       hair_type       : hair texture
+#       hair_concerns   : one or more hair/scalp concerns
+#       budget          : preferred product price range
+#     """
+#     # If user said no allergies, always store empty list
+#     allergies = (body.allergies or []) if body.has_allergies else []
+
+#     updates = {
+#         "onboarding_completed": True,
+#         "current_phase":        body.current_phase,
+#         "skin_type":            body.skin_type,
+#         "skin_concerns":        body.skin_concerns,
+#         "hair_type":            body.hair_type,
+#         "hair_concerns":        body.hair_concerns,
+#         "allergies":            allergies,
+#         "budget":               body.budget,
+#         "updated_at":           datetime.utcnow(),
+#     }
+
+#     await users_col().update_one({"_id": current_user["_id"]}, {"$set": updates})
+#     updated = await users_col().find_one({"_id": current_user["_id"]})
+
+#     return {
+#         "success": True,
+#         "message": "Onboarding complete! Your skin profile has been saved.",
+#         "user":    _fmt(updated),
+#     }
+
+@router.delete("/me")
+async def delete_me(current_user: CurrentUser):
     """
-    Submit onboarding answers after signup. Can be called once or multiple times
-    (re-submitting overwrites previous answers).
-
-    Mobile flow:
-      1. User signs up  →  POST /auth/signup
-      2. User verifies email  →  POST /auth/verify-email
-      3. App shows onboarding screens  →  POST /auth/onboarding
-      4. App checks `onboarding_completed` on GET /auth/me to decide
-         whether to show onboarding or go straight to dashboard.
-
-    Fields:
-      current_phase   : hormonal/life phase (optional — user may skip)
-      has_allergies   : if false, allergies list is saved as []
-      allergies       : list of known allergens
-      skin_type       : primary skin type
-      skin_concerns   : one or more skin concerns
-      hair_type       : hair texture
-      hair_concerns   : one or more hair/scalp concerns
-      budget          : preferred product price range
+    Permanently delete current user account.
     """
-    # If user said no allergies, always store empty list
-    allergies = (body.allergies or []) if body.has_allergies else []
 
-    updates = {
-        "onboarding_completed": True,
-        "current_phase":        body.current_phase,
-        "skin_type":            body.skin_type,
-        "skin_concerns":        body.skin_concerns,
-        "hair_type":            body.hair_type,
-        "hair_concerns":        body.hair_concerns,
-        "allergies":            allergies,
-        "budget":               body.budget,
-        "updated_at":           datetime.utcnow(),
-    }
+    user_id = str(current_user["_id"])
 
-    await users_col().update_one({"_id": current_user["_id"]}, {"$set": updates})
-    updated = await users_col().find_one({"_id": current_user["_id"]})
+    # revoke refresh tokens
+    await tokens_col().update_many(
+        {"user_id": user_id},
+        {"$set": {"is_revoked": True}}
+    )
+
+    # delete OTP history
+    await otp_col().delete_many({
+        "email": current_user["email"]
+    })
+
+    # delete user
+    await users_col().delete_one({
+        "_id": current_user["_id"]
+    })
 
     return {
         "success": True,
-        "message": "Onboarding complete! Your skin profile has been saved.",
-        "user":    _fmt(updated),
+        "message": "Account deleted successfully."
     }
