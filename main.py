@@ -34,6 +34,10 @@ from app.routers import onboarding
 from app.routers import admin, scan
 from app.routers import admin_product
 from app.routers import face_routine
+from app.routers import saved_routine
+from app.routers import routine_detail
+from app.routers import admin_video
+
 
 def _llm_label() -> str:
     mock      = os.getenv("MOCK_MODE",      "false").lower() == "true"
@@ -92,6 +96,9 @@ app.include_router(admin.router)
 app.include_router(scan.router)
 app.include_router(admin_product.router)
 app.include_router(face_routine.router)
+app.include_router(saved_routine.router)
+app.include_router(routine_detail.router)
+app.include_router(admin_video.router)
 
 
 

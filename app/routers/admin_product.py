@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from app.core.supabase_client import supabase
 
-router = APIRouter(prefix="/admin", tags=["Admin Product"])
+router = APIRouter(prefix="/admin", tags=["Admin"])
 
 
 # =========================
