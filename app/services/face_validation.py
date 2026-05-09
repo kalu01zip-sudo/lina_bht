@@ -50,7 +50,7 @@ def check_face(image):
         detection = results.detections[0]
 
         # 🔥 confidence (strong)
-        if detection.score[0] < 0.65:
+        if detection.score[0] < 0.45:
             return "low_confidence"
 
         h, w, _ = image.shape

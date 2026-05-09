@@ -60,7 +60,7 @@ Return JSON:
   ],
   "night": [
     {{
-      "phase": "repair",
+      "phase": "balance",
       "product_category": "cleanser",
       "focus": "oiliness"
     }},
@@ -70,29 +70,60 @@ Return JSON:
       "focus": "pigmentation"
     }},
     {{
-      "phase": "repair",
+      "phase": "maintenance",
       "product_category": "moisturizer",
       "focus": "hydration"
     }}
   ],
   "weekly": [
     {{
-      "phase": "repair",
+      "phase": "balance",
       "product_category": "cleanser",
       "focus": "oiliness"
     }},
     {{
-      "phase": "repair",
+      "phase": "maintenance",
       "product_category": "serum",
       "focus": "pigmentation"
     }},
     {{
-      "phase": "repair",
+      "phase": "maintenance",
       "product_category": "moisturizer",
       "focus": "hydration"
     }}
   ]
 }}
+
+IMPORTANT RULES:
+
+- Always generate:
+  - 4 morning steps
+  - 4 night steps
+  - 2 weekly care steps
+
+- Weekly care must NEVER be empty.
+
+- Use ONLY categories that exist in product database:
+  cleanser
+  serum
+  moisturizer
+  sunscreen
+  mask
+
+- Do NOT generate:
+  toner
+  essence
+  ampoule
+  exfoliator
+  cream cleanser
+  gel cleanser
+  foam cleanser
+
+- Weekly care should usually include:
+  - clay mask
+  - hydrating mask
+  - exfoliating mas
+
 """
 
     response = client.messages.create(

@@ -24,5 +24,9 @@ def build_routine(ai_data):
         "why": ai_data.get("why", []),
         "morning": [enrich(s) for s in ai_data.get("morning", [])],
         "night": [enrich(s) for s in ai_data.get("night", [])],
-        "weekly_care": [enrich(s) for s in ai_data.get("weekly_care", [])]
+        "weekly_care": [enrich(s) for s in ai_data.get("weekly_care", [{
+            "phase": "repair",
+            "product_category": "mask",
+            "focus": "hydration"
+        }])]
     }
