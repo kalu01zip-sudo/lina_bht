@@ -2,10 +2,8 @@ from fastapi import (
     APIRouter,
     UploadFile,
     File,
-    HTTPException,
-    Depends
+    HTTPException
 )
-from matplotlib import image
 
 from app.routers.auth import CurrentUser
 
@@ -19,8 +17,8 @@ from app.services.product_scan_history import (
     get_product_scan_by_id
 )
 
-from app.services.product_scan_storage import (
-    upload_product_scan_image
+from app.services.product_catalog_service import (
+    create_product_if_missing
 )
 
 
@@ -50,17 +48,6 @@ async def scan_product(
         image_bytes = await image.read()
 
         # ==================================
-        # SAVE IMAGE
-        # ==================================
-
-        image_url = upload_product_scan_image(
-
-            image_bytes=image_bytes,
-
-            content_type=image.content_type
-        )
-
-        # ==================================
         # AI ANALYSIS
         # ==================================
 
@@ -70,6 +57,56 @@ async def scan_product(
 
             image_bytes=image_bytes
         )
+
+        # ==================================
+        # SAVE PRODUCT TO SUPABASE
+        # ==================================
+
+        catalog_product = create_product_if_missing(
+
+            extracted_product={
+
+                "product_name":
+                    ai_result["product"].get(
+                        "name"
+                    ),
+
+                "brand":
+                    ai_result["product"].get(
+                        "brand"
+                    ),
+
+                "category":
+                    ai_result["product"].get(
+                        "category"
+                    ),
+
+                "ingredients":
+                    ai_result.get(
+                        "detected_ingredients",
+                        []
+                    )
+            },
+
+            image_bytes=image_bytes
+        )
+
+        image_url = catalog_product.get(
+            "image_url"
+        )
+
+        product_payload = {
+
+            **ai_result["product"],
+
+            "id":
+                catalog_product.get(
+                    "id"
+                ),
+
+            "image_url":
+                image_url
+        }
 
         # ==================================
         # SAVE TO MONGO
@@ -83,9 +120,7 @@ async def scan_product(
 
                 "product": {
 
-                    **ai_result["product"],
-
-                    "image_url": image_url
+                    **product_payload
                 },
 
                 "analysis":
@@ -108,7 +143,13 @@ async def scan_product(
             "scan_id":
                 product_scan_id,
 
-            **ai_result
+            **ai_result,
+
+            "product":
+                product_payload,
+
+            "catalog_product":
+                catalog_product
         }
 
     except Exception as e:
