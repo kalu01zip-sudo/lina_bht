@@ -38,6 +38,13 @@ from app.routers import saved_routine
 from app.routers import routine_detail
 from app.routers import admin_video
 from app.routers import profile
+from app.routers import support
+from app.routers import legal
+from app.routers import admin_legal
+from app.routers import product_scan
+from app.routers import (
+    product_routine
+)
 
 
 def _llm_label() -> str:
@@ -79,6 +86,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(onboarding.router)
 app.include_router(profile.router)
+app.include_router(support.router)
 # app.include_router(subscription_router)
 # app.include_router(score_router)
 # app.include_router(scan_face_router)
@@ -102,6 +110,11 @@ app.include_router(face_routine.router)
 app.include_router(saved_routine.router)
 app.include_router(routine_detail.router)
 app.include_router(admin_video.router)
+app.include_router(legal.router)
+app.include_router(admin_legal.router)
+app.include_router(product_scan.router)
+app.include_router(product_routine.router)
+
 
 
 

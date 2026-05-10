@@ -4,8 +4,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-client = MongoClient(os.getenv("MONGO_URI"))
+mongo_url = os.getenv("MONGO_URL")
+db_name = os.getenv("DB_NAME", "skinsense")
 
-db = client["skinsense"]
+if not mongo_url:
+    raise ValueError("MongoDB env not loaded: set MONGO_URL or MONGO_URI")
+
+client = MongoClient(
+    mongo_url,
+    serverSelectionTimeoutMS=5000
+)
+
+db = client[db_name]
 scan_collection = db["face_scans"]
 routine_detail_collection = db["routine_details"]
