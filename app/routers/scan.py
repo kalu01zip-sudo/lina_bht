@@ -3,6 +3,7 @@ from typing import Annotated, List
 from app.services.face_validation import validate_image
 from app.services.face_ai import analyze_face_with_claude
 import json
+import asyncio
 from app.core.mapping import extract_nutrition
 from app.core.mapping import extract_nutrition
 from app.services.nutrition_service import fetch_nutritions
@@ -12,7 +13,7 @@ from app.core.recommender import smart_rank
 from app.services.scan_storage import save_scan_result
 from app.services.scan_history import get_scan_history, get_scan_by_id
 from fastapi import HTTPException
-from app.routers.auth import CurrentUser
+from app.routers.auth import CurrentUser, users_col
 from app.services.image_storage import upload_scan_image
 
 router = APIRouter(prefix="/scan", tags=["Face Scan"])
@@ -102,6 +103,18 @@ async def upload_face_images(
         "recipes": recipe_data,
         "images": uploaded_image_urls 
     })
+
+    # ── Lia: trigger post-scan alert if severe conditions detected ────────
+    try:
+        from app.services.lia_coaching_engine import trigger_post_scan_alert
+        user_doc = await users_col().find_one({"_id": current_user["_id"]})
+        asyncio.get_event_loop().run_in_executor(
+            None,
+            trigger_post_scan_alert,
+            user_id, user_doc or {}, ai_data,
+        )
+    except Exception as exc:
+        print(f"[Lia] Post-scan alert trigger failed (non-fatal): {exc}")
 
     return {
         "scan_id": scan_id,

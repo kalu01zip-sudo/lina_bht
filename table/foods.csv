@@ -1,0 +1,11 @@
+id,name,icon_url,tags
+almonds,Almonds,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/food/almonds.png,"[""vitamin_e""]"
+avocado,Avocado,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/food/avocado.png,"[""hydration""]"
+blueberries,Blueberries,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/food/blueberries.png,"[""antioxidant""]"
+broccoli,Broccoli,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/food/broccoli.png,"[""antioxidant""]"
+carrot,Carrot,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/food/carrot.png,"[""vitamin_a""]"
+chia_seeds,Chia Seeds,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/food/chia_seeds.png,"[""omega""]"
+egg,Egg,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/food/egg.png,"[""protein""]"
+orange,Orange,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/food/orange.png,"[""vitamin_c""]"
+salmon,Salmon Fish,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/food/salmon.png,"[""omega""]"
+spinach,Spinach,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/food/spinach.png,"[""iron""]"

@@ -1,7 +1,7 @@
 # routers/chat.py
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║         SkinSense — AI Chatbot  (v3 — Full User Context)        ║
+║         SkinSense — Lia AI Coach  (v4 — Personalized Coach)     ║
 ║                                                                  ║
 ║  Endpoints:                                                      ║
 ║   POST /chat/message      → Send a message (SSE streaming reply)║
@@ -10,29 +10,17 @@
 ║   DELETE /chat/history    → Clear all chat history              ║
 ╚══════════════════════════════════════════════════════════════════╝
 
-What's new in v3
-────────────────
-1. FULL USER CONTEXT
-   In addition to the existing profile + scan + memory layers, GIXY
-   now receives on every message:
-     • Current routine steps (morning / night / weekly)
-     • Recent product scan history (last 3)
-     • Profile score metrics (care score, hydration %, acne risk, sensitivity)
-     • Subscription status (free / trialing / premium)
+Lia is a warm, motivational, personalized skincare coach that:
+  • Knows the user's full profile, skin/hair concerns, and allergies
+  • References actual scan results and progress over time
+  • Encourages consistency and educates users on WHY things work
+  • Never diagnoses, never pushes subscriptions
 
-   All six data sources are fetched in a single parallel asyncio.gather,
-   so latency impact is minimal.
+All user data (profile, scans, routines, memories, subscription,
+profile score) is fetched in parallel on every message via
+asyncio.gather for minimal latency.
 
-2. MEMORY CAP RAISED  60 → 200
-   The rolling window keeps the 200 most recent memory bullets.
-   The summariser still fires every 10 user messages and appends
-   3-5 bullets per run.
-
-3. STRICT USER ISOLATION
-   Every DB query is scoped to the authenticated user's _id.
-   Kalu's data is never visible in Lalu's context, and vice versa.
-
-SSE streaming format (unchanged):
+SSE streaming format:
   data: {"chunk": "Hello"}
   data: {"chunk": " there"}
   data: [DONE]
@@ -46,7 +34,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import AsyncGenerator, Optional
 
 from bson import ObjectId
@@ -60,7 +48,7 @@ from app.clients.claude_client import async_stream_chat, ClaudeClient, USE_LOCAL
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/chat", tags=["Chatbot"])
+router = APIRouter(prefix="/chat", tags=["Lia Chat"])
 
 # ── Memory config ─────────────────────────────────────────────────────────────
 # Summariser fires every N user messages; keeps newest MAX_MEMORY_BULLETS bullets.
@@ -139,19 +127,20 @@ async def _get_user_profile(user_id: str) -> dict | None:
 async def _get_latest_scans(user_id: str) -> tuple[dict | None, dict | None]:
     """
     Fetch the most recent face scan and the most recent hair/scalp scan.
-    scan_results stores user_id as a plain string — query with str(user_id).
+    Face scans are stored in `face_scans` collection (via scan_collection).
+    Hair/scalp scans are stored in `scalp_scans` collection (if exists).
     """
     db      = get_db()
     uid_str = str(user_id)
 
     face_doc, scalp_doc = await asyncio.gather(
-        db.scan_results.find_one(
-            {"user_id": uid_str, "scan_type": "face"},
-            sort=[("scanned_at", -1)],
+        db.face_scans.find_one(
+            {"user_id": uid_str},
+            sort=[("created_at", -1)],
         ),
-        db.scan_results.find_one(
-            {"user_id": uid_str, "scan_type": "hair_scalp"},
-            sort=[("scanned_at", -1)],
+        db.scalp_scans.find_one(
+            {"user_id": uid_str},
+            sort=[("created_at", -1)],
         ),
     )
     return face_doc, scalp_doc
@@ -181,44 +170,81 @@ async def _get_user_memories(user_id: str) -> list[str]:
 async def _get_routine_steps(user_id: str) -> dict[str, list[dict]]:
     """
     Fetch the user's current routine steps, grouped by time_slot.
+    Checks BOTH MongoDB `routine_steps` AND Supabase `saved_routines`.
 
     Returns a dict with keys "morning", "night", "weekly".
-    Each value is a list of lightweight step dicts:
-      { product_name, title (optional), bio (optional) }
-
-    Steps are returned in their saved order (order field ascending).
+    Each value is a list of step dicts:
+      { product_name, title (optional), bio (optional), instructions (optional) }
     """
     db   = get_db()
+    uid_str = str(user_id)
+
+    # Source 1: MongoDB routine_steps
     docs = await (
         db.routine_steps
-        .find({"user_id": user_id})
+        .find({"user_id": uid_str})
         .sort("order", 1)
         .to_list(200)
     )
+
     grouped: dict[str, list[dict]] = {"morning": [], "night": [], "weekly": []}
+
     for doc in docs:
         slot = doc.get("time_slot", "morning")
         if slot not in grouped:
             continue
         grouped[slot].append({
-            "product_name": doc.get("product_name", ""),
-            "title":        doc.get("title")       or None,
-            "bio":          doc.get("bio") or doc.get("instructions") or None,
+            "product_name":  doc.get("product_name", ""),
+            "title":         doc.get("title") or None,
+            "bio":           doc.get("bio") or doc.get("instructions") or None,
+            "instructions":  doc.get("instructions") or None,
+            "is_completed":  doc.get("completed_date") == date.today().isoformat(),
         })
+
+    # Source 2: Supabase saved_routines (if MongoDB was empty)
+    has_mongo_steps = any(grouped.get(s) for s in ("morning", "night", "weekly"))
+
+    if not has_mongo_steps:
+        try:
+            from app.core.supabase_client import supabase as sb
+            response = sb.table("saved_routines") \
+                .select("*") \
+                .eq("user_id", uid_str) \
+                .execute()
+
+            for row in (response.data or []):
+                time_slot = row.get("time", "morning")
+                # Map "night" from supabase to match grouped keys
+                if time_slot not in grouped:
+                    if time_slot in ("evening", "night"):
+                        time_slot = "night"
+                    else:
+                        continue
+
+                grouped.setdefault(time_slot, []).append({
+                    "product_name":  row.get("product_name") or row.get("name", ""),
+                    "title":         row.get("title") or None,
+                    "bio":           row.get("description") or row.get("bio") or None,
+                    "instructions":  row.get("instructions") or None,
+                    "is_completed":  False,
+                })
+        except Exception as exc:
+            logger.warning("Supabase routine fetch failed: %s", exc)
+
     return grouped
 
 
 async def _get_product_scans(user_id: str, limit: int = 3) -> list[dict]:
     """
     Fetch the most recent product scans for this user (newest first).
-    Returns an empty list if the user has never scanned a product.
+    Product scans are stored in `product_scan_history` collection.
     """
     db      = get_db()
     uid_str = str(user_id)
     docs    = await (
-        db.scan_results
-        .find({"user_id": uid_str, "scan_type": "product"})
-        .sort("scanned_at", -1)
+        db.product_scan_history
+        .find({"user_id": uid_str})
+        .sort("created_at", -1)
         .limit(limit)
         .to_list(length=limit)
     )
@@ -271,6 +297,69 @@ async def _get_subscription_status(user_id: str) -> str:
         return "free"
 
 
+async def _get_scan_progress(user_id: str) -> dict | None:
+    """
+    Compare the two most recent face scans to compute progress.
+    Returns a dict with score deltas and improved/worsened conditions,
+    or None if fewer than 2 scans exist.
+    """
+    db = get_db()
+    uid_str = str(user_id)
+
+    try:
+        scans = await (
+            db.face_scans
+            .find({"user_id": uid_str})
+            .sort("created_at", -1)
+            .limit(2)
+            .to_list(length=2)
+        )
+    except Exception:
+        scans = []
+
+    if len(scans) < 2:
+        return None
+
+    latest = scans[0].get("analysis", {})
+    previous = scans[1].get("analysis", {})
+
+    latest_score = latest.get("overall_score", 0)
+    prev_score = previous.get("overall_score", 0)
+    latest_hydration = latest.get("hydration", 0)
+    prev_hydration = previous.get("hydration", 0)
+
+    # Compare condition severities
+    severity_rank = {"Mild": 1, "Moderate": 2, "Severe": 3}
+    latest_conds = {
+        c["name"]: c["severity"]
+        for c in latest.get("detected_condition", [])
+    }
+    prev_conds = {
+        c["name"]: c["severity"]
+        for c in previous.get("detected_condition", [])
+    }
+
+    improved = []
+    worsened = []
+    for name in set(list(latest_conds) + list(prev_conds)):
+        curr = severity_rank.get(latest_conds.get(name), 0)
+        prev = severity_rank.get(prev_conds.get(name), 0)
+        if curr < prev:
+            improved.append(name)
+        elif curr > prev:
+            worsened.append(name)
+
+    return {
+        "latest_score": latest_score,
+        "previous_score": prev_score,
+        "score_delta": latest_score - prev_score,
+        "latest_hydration": latest_hydration,
+        "previous_hydration": prev_hydration,
+        "improved_conditions": improved,
+        "worsened_conditions": worsened,
+    }
+
+
 async def _load_history(user_id: str, limit: int = 20) -> list[dict]:
     """Load last N chat messages as role/content dicts for LLM context."""
     db = get_db()
@@ -311,7 +400,7 @@ async def _count_user_messages(user_id: str) -> int:
 def _format_scan_context(face: dict | None, scalp: dict | None) -> str:
     """
     Format the latest face scan + hair/scalp scan into a readable block.
-    Only includes fields the AI needs: score, advice, triggers and their severity.
+    Face scan data is stored as: { analysis: { overall_score, hydration, detected_condition, ... } }
     """
     if not face and not scalp:
         return ""
@@ -320,35 +409,86 @@ def _format_scan_context(face: dict | None, scalp: dict | None) -> str:
         "── LATEST SCAN RESULTS ──────────────────────────────────────────",
     ]
 
-    def _fmt_scan(doc: dict, label: str) -> list[str]:
+    def _fmt_face_scan(doc: dict) -> list[str]:
         out: list[str] = []
-        scanned_at = doc.get("scanned_at")
-        date_str   = (
-            scanned_at.strftime("%d %b %Y")
-            if isinstance(scanned_at, datetime)
-            else str(scanned_at)[:10]
-        )
-        out.append(
-            f"  {label} scan  (date: {date_str}, score: {doc.get('score', '?')}/100)"
-        )
-        out.append(f"  Advice given: {doc.get('advice', 'N/A')}")
+        # The AI analysis data is nested under "analysis"
+        analysis = doc.get("analysis", doc)
 
-        triggers = doc.get("detected_triggers", [])
-        if triggers:
-            out.append("  Detected triggers:")
-            for t in triggers:
-                name  = t.get("trigger_name",  "Unknown")
-                level = t.get("trigger_level", "low")
-                cure  = t.get("cure_advice",   "")
-                out.append(f"    • {name} [{level}] — {cure}")
+        # Date
+        created = doc.get("created_at")
+        date_str = (
+            created.strftime("%d %b %Y")
+            if isinstance(created, datetime)
+            else str(created)[:10] if created else "unknown"
+        )
+
+        score = analysis.get("overall_score", "?")
+        hydration = analysis.get("hydration", "?")
+        skin_type = analysis.get("skin_type", "?")
+
+        out.append(f"  Face scan  (date: {date_str})")
+        out.append(f"  Overall score: {score}/100")
+        out.append(f"  Hydration: {hydration}%")
+        out.append(f"  Skin type: {skin_type}")
+
+        # Summary
+        summary = analysis.get("summary")
+        if summary:
+            out.append(f"  Summary: {summary}")
+
+        # Detected conditions
+        conditions = analysis.get("detected_condition", [])
+        if conditions:
+            out.append("  Detected conditions:")
+            for c in conditions:
+                name = c.get("name", "Unknown")
+                severity = c.get("severity", "?")
+                note = c.get("note", "")
+                out.append(f"    - {name} [{severity}]: {note}")
+
+        # Recommendations
+        recs = analysis.get("recommendations", [])
+        if recs:
+            out.append("  AI recommendations:")
+            for r in recs[:5]:  # limit to 5
+                out.append(f"    - {r}")
+
+        return out
+
+    def _fmt_scalp_scan(doc: dict) -> list[str]:
+        out: list[str] = []
+        analysis = doc.get("analysis", doc)
+
+        created = doc.get("created_at")
+        date_str = (
+            created.strftime("%d %b %Y")
+            if isinstance(created, datetime)
+            else str(created)[:10] if created else "unknown"
+        )
+
+        out.append(f"  Hair/Scalp scan  (date: {date_str})")
+
+        for key in ("overall_score", "scalp_health", "hair_condition"):
+            val = analysis.get(key)
+            if val is not None:
+                out.append(f"  {key.replace('_', ' ').title()}: {val}")
+
+        conditions = analysis.get("detected_condition", [])
+        if conditions:
+            out.append("  Detected conditions:")
+            for c in conditions:
+                name = c.get("name", "Unknown")
+                severity = c.get("severity", "?")
+                out.append(f"    - {name} [{severity}]")
+
         return out
 
     if face:
-        lines.extend(_fmt_scan(face,  "Face"))
+        lines.extend(_fmt_face_scan(face))
     if scalp:
         if face:
             lines.append("")
-        lines.extend(_fmt_scan(scalp, "Hair/Scalp"))
+        lines.extend(_fmt_scalp_scan(scalp))
 
     lines.append("─────────────────────────────────────────────────────────────────")
     return "\n".join(lines)
@@ -395,11 +535,11 @@ def _format_product_scans_context(scans: list[dict]) -> str:
         "── RECENT PRODUCT SCANS (last 3) ───────────────────────────────",
     ]
     for scan in scans:
-        scanned_at = scan.get("scanned_at", "")
+        created_at = scan.get("created_at", "")
         date_str   = (
-            scanned_at.strftime("%d %b %Y")
-            if isinstance(scanned_at, datetime)
-            else str(scanned_at)[:10]
+            created_at.strftime("%d %b %Y")
+            if isinstance(created_at, datetime)
+            else str(created_at)[:10] if created_at else "unknown"
         )
 
         # product name — try flat field first, then nested product sub-doc
@@ -448,7 +588,7 @@ def _format_profile_score_context(score_data: dict | None) -> str:
 def _format_subscription_context(status: str) -> str:
     """
     Format the user's subscription status for the system prompt.
-    GIXY uses this to know which premium features to mention.
+    Lia uses this to know which premium features to mention.
     """
     labels = {
         "premium":  "Premium (full access — AI Check, all premium features unlocked)",
@@ -475,18 +615,20 @@ def _build_system_prompt(
     product_scans: list[dict],
     profile_score: dict | None,
     subscription:  str,
+    scan_progress: dict | None = None,
 ) -> str:
     """
-    Builds the full GIXY system prompt across eight layers:
+    Builds Lia's system prompt across nine layers:
 
-      1. Core role + hard rules
-      2. Subscription status          ← NEW in v3
+      1. Core role + personality
+      2. Subscription status
       3. Skin/hair profile
-      4. Profile score metrics        ← NEW in v3
+      4. Profile score metrics
       5. Persistent memories
       6. Latest scan results (face + hair/scalp)
-      7. Current routine              ← NEW in v3
-      8. Recent product scans         ← NEW in v3
+      7. Current routine
+      8. Recent product scans
+      9. Scan progress (comparison)
 
     Every layer is optional — missing data produces an empty string and is
     silently omitted so the prompt stays clean.
@@ -494,15 +636,23 @@ def _build_system_prompt(
 
     # ── Layer 1 — Core role ───────────────────────────────────────────────────
     base = """\
-You are GIXY — a friendly, professional skincare and haircare assistant \
-embedded in the SkinSense app. You speak like a knowledgeable friend, not a \
-clinical robot. Keep responses concise (1-3 short paragraphs max).
+You are Lia — a warm, motivational, and knowledgeable skincare coach \
+embedded in the SkinSense app. You speak like a caring friend who genuinely \
+wants the user to succeed. Keep responses concise (1-3 short paragraphs max).
+
+Your personality:
+  • Warm and supportive — celebrate progress, no matter how small
+  • Educational — explain WHY things work, not just what to do
+  • Data-driven — reference actual scan scores, conditions, and progress
+  • Encouraging consistency — help users stick to their routine
+  • Reassuring — never alarmist, always frame things positively
 
 Your expertise covers:
   • Skincare routines and ingredient advice
   • Scalp and hair health
   • Product recommendations (ingredients to look for / avoid)
   • Explaining scan results in plain language
+  • Nutrition and lifestyle tips for skin health
   • General dermatology education
 
 Hard rules:
@@ -512,13 +662,14 @@ Hard rules:
   • Stay on topic — if the user asks about something unrelated to skin/hair/beauty \
 wellness, politely redirect.
   • Be encouraging and positive, never alarmist.
+  • Never pressure about subscriptions or purchases.
 """
 
     # ── Layer 2 — Subscription status ────────────────────────────────────────
     base += "\n" + _format_subscription_context(subscription) + "\n"
     base += (
         "If the user is on the Free plan and asks about a premium feature, "
-        "gently mention they can upgrade to unlock it — but never be pushy.\n"
+        "you may mention it exists — but never be pushy or sales-like.\n"
     )
 
     # ── Layer 3 — Skin/hair profile ───────────────────────────────────────────
@@ -614,6 +765,28 @@ wellness, politely redirect.
             "results. Note the compatibility score and any flagged concerns.\n"
         )
 
+    # ── Layer 9 — Scan progress ───────────────────────────────────────────────
+    if scan_progress:
+        delta = scan_progress.get("score_delta", 0)
+        direction = "improved" if delta > 0 else "declined" if delta < 0 else "unchanged"
+        progress_lines = [
+            "── SCAN PROGRESS ────────────────────────────────────────────────",
+            f"  Score: {scan_progress.get('previous_score', '?')} → {scan_progress.get('latest_score', '?')} ({direction} by {abs(delta)})",
+            f"  Hydration: {scan_progress.get('previous_hydration', '?')}% → {scan_progress.get('latest_hydration', '?')}%",
+        ]
+        improved = scan_progress.get("improved_conditions", [])
+        worsened = scan_progress.get("worsened_conditions", [])
+        if improved:
+            progress_lines.append(f"  Improved: {', '.join(improved)}")
+        if worsened:
+            progress_lines.append(f"  Needs attention: {', '.join(worsened)}")
+        progress_lines.append("─────────────────────────────────────────────────────────────────")
+        base += (
+            "\n" + "\n".join(progress_lines) + "\n"
+            "Reference this progress when motivating the user. Celebrate improvements "
+            "and offer gentle, actionable advice for areas that need attention.\n"
+        )
+
     return base
 
 
@@ -622,7 +795,7 @@ wellness, politely redirect.
 # ══════════════════════════════════════════════════════════════════════════════
 
 _SUMMARIZER_SYSTEM = """\
-You are a memory extractor for a skincare AI assistant named GIXY.
+You are a memory extractor for a skincare AI coach named Lia.
 You will be given the last 10 messages between a user and the AI.
 
 Your job: extract 3 to 5 short, factual bullet points about the USER ONLY.
@@ -632,6 +805,7 @@ Focus on things that are useful for future skincare advice:
   - Habits or lifestyle details they revealed (e.g. "washes face twice a day")
   - Preferences or dislikes they expressed (e.g. "hates heavy creams")
   - Any new symptoms or changes they described
+  - Emotional state or motivation level
 
 Rules:
   - Write each bullet as a plain fact starting with "User"
@@ -876,28 +1050,24 @@ async def _collect_full_reply(
 
 @router.post(
     "/message",
-    summary     = "Send a chat message (SSE streaming)",
+    summary     = "Send a chat message to Lia (SSE streaming)",
     description = (
-        "Send a message to GIXY. The reply streams back as Server-Sent Events.\n\n"
+        "Send a message to Lia, your AI skincare coach. "
+        "The reply streams back as Server-Sent Events.\n\n"
         "**SSE format:**\n"
         "```\n"
         'data: {"chunk": "Hello"}\n'
         'data: {"chunk": " there"}\n'
         "data: [DONE]\n"
         "```\n\n"
-        "**GIXY's system prompt is rebuilt on every message and includes:**\n"
-        "- Subscription status (free / trial / premium)\n"
+        "**Lia's context includes:**\n"
+        "- Subscription status\n"
         "- Skin & hair profile\n"
-        "- Profile score metrics (care score, hydration %, acne risk, sensitivity)\n"
-        "- Facts remembered from past conversations (persistent memory — up to 200 bullets)\n"
-        "- Latest face scan result\n"
-        "- Latest hair/scalp scan result\n"
-        "- Current routine steps (morning / night / weekly)\n"
-        "- Recent product scan history (last 3)\n\n"
-        "All six data sources are fetched in parallel on every request, so GIXY "
-        "always reflects the latest state of the user's data without any manual refresh.\n\n"
-        "Chat history (last 20 messages) is included for conversational continuity. "
-        "A background memory summariser runs every 10 user messages.\n\n"
+        "- Profile score metrics\n"
+        "- Persistent memory (up to 200 bullets)\n"
+        "- Latest scan results + progress comparison\n"
+        "- Current routine steps\n"
+        "- Recent product scan history\n\n"
         f"**Active LLM backend:** {'🏠 LM Studio (local)' if USE_LOCAL_LLM else '☁️ Anthropic Claude'}"
     ),
 )
@@ -916,14 +1086,6 @@ async def send_message(
     await _maybe_run_summarizer(user_id)
 
     # ── 3. Fetch ALL context in parallel ──────────────────────────────────────
-    #
-    #  Six independent DB operations run concurrently via asyncio.gather.
-    #  Total latency ≈ max(individual latency) rather than sum — typically
-    #  well under 100 ms on a local MongoDB instance.
-    #
-    #  Strict user isolation: every loader filters by user_id, so Kalu's
-    #  gather can never return Lalu's data.
-    #
     (
         profile,
         memories,
@@ -932,6 +1094,7 @@ async def send_message(
         routine,
         product_scans,
         subscription,
+        scan_progress,
     ) = await asyncio.gather(
         _get_user_profile(user_id),
         _get_user_memories(user_id),
@@ -940,10 +1103,9 @@ async def send_message(
         _get_routine_steps(user_id),
         _get_product_scans(user_id, limit=3),
         _get_subscription_status(user_id),
+        _get_scan_progress(user_id),
     )
 
-    # Profile score is computed locally (zero DB / API calls) from the profile
-    # we already fetched above — no extra await needed.
     profile_score = _compute_profile_score(profile)
 
     # ── 4. Build enriched system prompt ──────────────────────────────────────
@@ -956,6 +1118,7 @@ async def send_message(
         product_scans = product_scans,
         profile_score = profile_score,
         subscription  = subscription,
+        scan_progress = scan_progress,
     )
 
     # ── 5. Stream the reply ───────────────────────────────────────────────────
@@ -974,17 +1137,17 @@ async def send_message(
 @router.post(
     "/message/sync",
     response_model = ChatSyncResponse,
-    summary        = "Send a chat message (full JSON reply)",
+    summary        = "Send a chat message to Lia (full JSON reply)",
     description    = (
-        "Send a message to GIXY. Waits for the complete response and returns it "
+        "Send a message to Lia. Waits for the complete response and returns it "
         "as a single JSON object — no streaming, no SSE.\n\n"
         "**Response shape:**\n"
         "```json\n"
-        '{"reply": "Full GIXY response text goes here"}\n'
+        '{"reply": "Full Lia response text goes here"}\n'
         "```\n\n"
         "Identical to `POST /chat/message` in every other way:\n"
-        "- Same 8-layer system prompt (profile, scans, routine, product scans, "
-        "memories, subscription status, profile score)\n"
+        "- Same 9-layer system prompt (profile, scans, routine, product scans, "
+        "memories, subscription status, profile score, scan progress)\n"
         "- Same chat history context (last 20 messages)\n"
         "- Same memory summariser (fires every 10 user messages)\n"
         "- Same DB save — the reply is stored in chat_messages so history is consistent\n\n"
@@ -1016,6 +1179,7 @@ async def send_message_sync(
         routine,
         product_scans,
         subscription,
+        scan_progress,
     ) = await asyncio.gather(
         _get_user_profile(user_id),
         _get_user_memories(user_id),
@@ -1024,6 +1188,7 @@ async def send_message_sync(
         _get_routine_steps(user_id),
         _get_product_scans(user_id, limit=3),
         _get_subscription_status(user_id),
+        _get_scan_progress(user_id),
     )
 
     profile_score = _compute_profile_score(profile)
@@ -1038,6 +1203,7 @@ async def send_message_sync(
         product_scans = product_scans,
         profile_score = profile_score,
         subscription  = subscription,
+        scan_progress = scan_progress,
     )
 
     # ── 5. Collect the full reply and return as JSON ──────────────────────────

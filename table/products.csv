@@ -1,0 +1,11 @@
+id,name,image_url,category,tags,concerns,priority
+anti_puff_eye_cream_01,Eye Bag Repair Cream,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/products/anti_puff_eye_cream_01.jpg,eye_care,"[""vitamin_e"",""collagen""]",,1
+collagen_serum_01,Collagen Boost Serum,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/products/collagen_serum_01.jpg,serum,"[""collagen""]",,1
+foam_cleanser_01,Foaming Oil Control Cleanser,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/products/foam_cleanser_01.jpg,cleanser,"[""zinc""]",,1
+gentle_cleanser_01,Gentle Daily Cleanser,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/products/gentle_cleanser_01.jpg,cleanser,"[""vitamin_e""]",,1
+hydrating_serum_01,Hyaluronic Hydration Serum,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/products/hydrating_serum_01.jpg,serum,"[""omega_3"",""vitamin_e""]",,1
+niacinamide,Niacinamide Oil Control Serum,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/products/niacinamide.jpg,serum,"[""zinc""]",,1
+oil_clear_deep_cleansing_icy_face_wash,Oil Clear Deep Cleansing Icy Face Wash,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/products/oil_clear_deep_cleansing_icy_face_wash.jpg,face wash,"[""mineral clay"",""menthol""]",[],99
+retinol_serum_01,Retinol Anti-Aging Serum,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/products/retinol_serum_01.jpg,serum,"[""vitamin_a""]",,1
+salicylic_cleanser_01,Salicylic Acid Cleanser,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/products/salicylic_cleanser_01.jpg,cleanser,"[""zinc""]",,1
+vitamin_c_serum_01,Vitamin C Brightening Serum,https://dbcjzgwcqshtwowtzjce.supabase.co/storage/v1/object/public/assets/products/vitamin_c_serum_01.png,serum,"[""vitamin_c""]",,1

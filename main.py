@@ -23,6 +23,7 @@ from app.routers.subscription       import router as subscription_router
 # from app.routers.scan_details       import router as scan_details_router        
 # from app.routers.routine_generate   import router as routine_generate_router    
 from app.routers.chat               import router as chat_router
+from app.routers import lia
 # from app.routers.routine            import router as routine_router
 from app.routers.scan_barcode_check import router as scan_barcode_check_router
 from app.routers.admin_auth         import router as admin_auth_router
@@ -64,8 +65,26 @@ def _llm_label() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_indexes()
+
+    # ── Start Lia notification scheduler ──────────────────────────────────
+    try:
+        from app.services.lia_scheduler import start_scheduler, stop_scheduler
+        start_scheduler()
+        print("🤖 Lia scheduler started.")
+    except Exception as exc:
+        print(f"⚠️  Lia scheduler failed to start (non-fatal): {exc}")
+        stop_scheduler = None
+
     print(f"🚀 SkinSense API ready.  LLM = {_llm_label()}")
     yield
+
+    # ── Stop Lia scheduler ────────────────────────────────────────────────
+    try:
+        if stop_scheduler:
+            stop_scheduler()
+    except Exception:
+        pass
+
     print("🛑 Server shutdown.")
 
 
@@ -102,7 +121,8 @@ app.include_router(routine_detail.router)
 # app.include_router(scan_product_router)
 # app.include_router(scan_details_router)       
 # app.include_router(routine_generate_router)   
-# app.include_router(chat_router)
+app.include_router(chat_router)
+app.include_router(lia.router)
 # app.include_router(routine_router)
 # app.include_router(scan_barcode_check_router)
 app.include_router(admin_auth_router)  

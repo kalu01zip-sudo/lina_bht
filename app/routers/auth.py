@@ -20,6 +20,7 @@ Endpoints:
 import os
 from datetime import datetime
 from typing import Annotated, Optional
+from pydantic import BaseModel
 
 import httpx
 from bson import ObjectId
@@ -152,6 +153,46 @@ async def _get_current_user(
 
 
 CurrentUser = Annotated[dict, Depends(_get_current_user)]
+
+
+# ─────────────────────────────────────────────────
+#  FCM TOKEN (Push Notifications)
+# ─────────────────────────────────────────────────
+
+class FCMTokenRequest(BaseModel):
+    fcm_token: str
+
+@router.post("/fcm-token")
+async def save_fcm_token(body: FCMTokenRequest, current_user: CurrentUser):
+    """
+    Save or update FCM token for push notifications.
+    Called by the mobile app after login / on token refresh.
+    Supports multiple devices per user (stores as array).
+    """
+    token = body.fcm_token.strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="FCM token cannot be empty.")
+
+    # Add token to array (avoid duplicates)
+    await users_col().update_one(
+        {"_id": current_user["_id"]},
+        {"$addToSet": {"fcm_tokens": token}},
+    )
+
+    return {"success": True, "message": "FCM token saved."}
+
+
+@router.delete("/fcm-token")
+async def remove_fcm_token(body: FCMTokenRequest, current_user: CurrentUser):
+    """
+    Remove an FCM token (e.g. on logout from a specific device).
+    """
+    await users_col().update_one(
+        {"_id": current_user["_id"]},
+        {"$pull": {"fcm_tokens": body.fcm_token}},
+    )
+
+    return {"success": True, "message": "FCM token removed."}
 
 
 # ─────────────────────────────────────────────────
