@@ -87,6 +87,14 @@ app.include_router(auth_router)
 app.include_router(onboarding.router)
 app.include_router(profile.router)
 app.include_router(support.router)
+app.include_router(scan.router)
+app.include_router(product_scan.router)
+app.include_router(face_routine.router)
+app.include_router(product_routine.router)
+app.include_router(routine_detail.router)
+
+
+
 # app.include_router(subscription_router)
 # app.include_router(score_router)
 # app.include_router(scan_face_router)
@@ -96,24 +104,25 @@ app.include_router(support.router)
 # app.include_router(routine_generate_router)   
 # app.include_router(chat_router)
 # app.include_router(routine_router)
-app.include_router(scan_barcode_check_router)
-app.include_router(admin_auth_router)          
+# app.include_router(scan_barcode_check_router)
+app.include_router(admin_auth_router)  
+app.include_router(admin.router)        
 app.include_router(admin_home_router)          
 # app.include_router(admin_products_router)      
 app.include_router(admin_subscription_router)  
 app.include_router(admin_analytics_router)
 
-app.include_router(admin.router)
-app.include_router(scan.router)
+
+
 app.include_router(admin_product.router)
-app.include_router(face_routine.router)
+
 app.include_router(saved_routine.router)
-app.include_router(routine_detail.router)
+
 app.include_router(admin_video.router)
 app.include_router(legal.router)
 app.include_router(admin_legal.router)
-app.include_router(product_scan.router)
-app.include_router(product_routine.router)
+
+
 
 
 

@@ -4,6 +4,9 @@ from app.services.face_routine_ai import generate_face_routine_ai
 from app.services.face_routine_builder import build_routine
 from app.services.scan_history import get_scan_by_id
 from app.routers.auth import CurrentUser
+from app.services.routine_draft_service import (
+    register_grouped_routine_drafts
+)
 
 
 router = APIRouter(prefix="/generate", tags=["Routine"])
@@ -50,8 +53,19 @@ async def generate_face_routine(
         # 🔥 STEP 6: Product mapping
         routine = build_routine(ai_plan)
 
+        drafts = register_grouped_routine_drafts(
+            user_id=str(current_user["_id"]),
+            source="face",
+            routine=routine,
+            scan_id=body.scan_id
+        )
+
         return {
             "scan_id": body.scan_id,
+            "routine_step_id": [
+                draft["routine_id"]
+                for draft in drafts
+            ],
             "routine": routine
         }
 

@@ -29,6 +29,10 @@ from app.services.routine_product_injector import (
     inject_products_into_routine
 )
 
+from app.services.routine_draft_service import (
+    register_product_routine_drafts
+)
+
 from app.core.mongo_client import db
 from bson import ObjectId
 
@@ -80,9 +84,21 @@ async def run_product_routine_pipeline(
             cached["_id"]
         )
 
+        drafts = register_product_routine_drafts(
+            user_id=user_id,
+            source="product",
+            routine_data=cached["routine"],
+            scan_id=product_scan_id
+        )
+
         return {
 
             "cached": True,
+
+            "routine_step_id": [
+                draft["routine_id"]
+                for draft in drafts
+            ],
 
             "routine":
                 cached["routine"]
@@ -213,6 +229,14 @@ async def run_product_routine_pipeline(
         routine_data=routine,
         user_context=user_profile
     )
+
+    drafts = register_product_routine_drafts(
+        user_id=user_id,
+        source="product",
+        routine_data=routine,
+        scan_id=product_scan_id
+    )
+
     # ======================================
     # SAVE CACHE
     # ======================================
@@ -236,6 +260,11 @@ async def run_product_routine_pipeline(
         "cached": False,
 
         "duplicate": False,
+
+        "routine_step_id": [
+            draft["routine_id"]
+            for draft in drafts
+        ],
 
         "routine": routine
     }

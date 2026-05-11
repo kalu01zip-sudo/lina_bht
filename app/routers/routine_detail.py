@@ -40,7 +40,7 @@ from app.services.recipe_service import (
 
 router = APIRouter(
     prefix="/routine",
-    tags=["Routine Detail"]
+    tags=["Routine"]
 )
 
 
