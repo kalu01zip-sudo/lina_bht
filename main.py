@@ -112,17 +112,15 @@ app.include_router(face_routine.router)
 app.include_router(product_routine.router)
 app.include_router(routine_detail.router)
 
+app.include_router(subscription_router)
 
 
-# app.include_router(subscription_router)
 # app.include_router(score_router)
 # app.include_router(scan_face_router)
 # app.include_router(scan_hair_scalp_router)
 # app.include_router(scan_product_router)
 # app.include_router(scan_details_router)       
 # app.include_router(routine_generate_router)   
-app.include_router(chat_router)
-app.include_router(lia.router)
 # app.include_router(routine_router)
 # app.include_router(scan_barcode_check_router)
 app.include_router(admin_auth_router)  
