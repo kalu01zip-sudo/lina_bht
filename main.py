@@ -113,6 +113,8 @@ app.include_router(product_routine.router)
 app.include_router(routine_detail.router)
 
 app.include_router(subscription_router)
+app.include_router(chat_router)
+app.include_router(lia.router)
 
 
 # app.include_router(score_router)

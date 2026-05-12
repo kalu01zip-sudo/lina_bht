@@ -71,6 +71,7 @@ from pydantic import BaseModel
 
 from app.clients.claude_client import async_vision_call, is_vision_available, USE_LOCAL_LLM
 from app.core.database import get_db
+from app.utils.image_utils import optimise_image
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/scan", tags=["Scan"])
@@ -285,34 +286,6 @@ def _laplacian_variance(image_bytes: bytes) -> float:
         return sum((v - mean) ** 2 for v in lap_vals) / n
 
 
-# ── Image optimisation ────────────────────────────────────────────────────────
-
-def _optimise_image(image_bytes: bytes, media_type: str) -> tuple[bytes, str]:
-    img = Image.open(io.BytesIO(image_bytes))
-    try:
-        from PIL import ImageOps
-        img = ImageOps.exif_transpose(img)
-    except Exception:
-        pass
-
-    max_dim = max(img.width, img.height)
-    if max_dim > RESIZE_MAX_PX:
-        scale = RESIZE_MAX_PX / max_dim
-        img   = img.resize(
-            (max(1, int(img.width * scale)), max(1, int(img.height * scale))),
-            Image.LANCZOS,
-        )
-
-    if media_type == "image/gif":
-        buf = io.BytesIO()
-        img.convert("RGBA").save(buf, format="PNG", optimize=True)
-        return buf.getvalue(), "image/png"
-
-    if img.mode not in ("RGB", "L"):
-        img = img.convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
-    return buf.getvalue(), "image/jpeg"
 
 
 # ── Barcode decoding ──────────────────────────────────────────────────────────
@@ -646,7 +619,9 @@ async def product_scan(
     # ── Optimise images for Claude ────────────────────────────────────────────
     encoded: list[tuple[str, str]] = []
     for raw_bytes, media_type in raw_images:
-        opt_bytes, opt_type = await asyncio.to_thread(_optimise_image, raw_bytes, media_type)
+        opt_bytes, opt_type = await asyncio.to_thread(
+            optimise_image, raw_bytes, media_type, RESIZE_MAX_PX, JPEG_QUALITY
+        )
         b64 = base64.standard_b64encode(opt_bytes).decode("utf-8")
         encoded.append((b64, opt_type))
 

@@ -11,7 +11,8 @@ from app.services.food_service import fetch_foods_by_tags
 from app.services.recipe_service import fetch_recipes_by_tags
 from app.core.recommender import smart_rank
 from app.services.scan_storage import save_scan_result
-from app.services.scan_history import get_scan_history, get_scan_by_id
+from app.services.scan_history import get_scan_history, get_scan_by_id, get_all_scans_for_comparison
+from app.services.scan_comparison_ai import generate_comparison_message
 from fastapi import HTTPException
 from app.routers.auth import CurrentUser, users_col
 from app.services.image_storage import upload_scan_image
@@ -147,3 +148,66 @@ async def scan_detail(scan_id: str, current_user: CurrentUser):
         raise HTTPException(403, "Not allowed")
 
     return data
+
+
+@router.get("/compare/random")
+async def random_compare(current_user: CurrentUser):
+    user_id = str(current_user["_id"])
+    
+    # Fetch scans (oldest first)
+    scans = await asyncio.to_thread(get_all_scans_for_comparison, user_id)
+    
+    if not scans:
+        return {}
+
+    first_scan_date = scans[0]["created_at"]
+    
+    # Group by weeks (relative to first scan)
+    weeks = {}
+    for s in scans:
+        date = s["created_at"]
+        # If date is a string (legacy), parse it
+        if isinstance(date, str):
+            from datetime import datetime
+            try:
+                date = datetime.fromisoformat(date)
+            except Exception:
+                continue
+                
+        days_diff = (date - first_scan_date).days
+        week_num = (days_diff // 7) + 1
+        # Store/Overwrite so we have the latest scan of that week
+        weeks[week_num] = s
+
+    results = {}
+    
+    # Pairs to compare: (key, week_a, week_b)
+    pairs = [
+        ("compare_1", 1, 4),
+        ("compare_2", 2, 3),
+        ("compare_3", 1, 3)
+    ]
+    
+    for key, w1, w2 in pairs:
+        if w1 in weeks and w2 in weeks:
+            scan1 = weeks[w1]
+            scan2 = weeks[w2]
+            
+            # Generate AI message
+            message = await generate_comparison_message(
+                scan1.get("analysis", {}),
+                scan2.get("analysis", {})
+            )
+            
+            # Get one image for each
+            img1 = scan1.get("images", [None])[0] if scan1.get("images") else None
+            img2 = scan2.get("images", [None])[0] if scan2.get("images") else None
+            
+            results[key] = {
+                "between": [f"week{w1}", f"week{w2}"],
+                f"week_{w1}_image_url": img1,
+                f"week_{w2}_image_url": img2,
+                "message": message
+            }
+            
+    return results

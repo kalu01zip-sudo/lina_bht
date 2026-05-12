@@ -10,15 +10,16 @@ client = Anthropic(
 )
 
 
+from app.utils.image_utils import optimise_image
+
 # ==========================================
 # ENCODE IMAGE
 # ==========================================
 
 def encode_image(image_bytes: bytes):
-
-    return base64.b64encode(
-        image_bytes
-    ).decode("utf-8")
+    # Optimise before encoding
+    opt_bytes, _ = optimise_image(image_bytes, "image/jpeg")
+    return base64.b64encode(opt_bytes).decode("utf-8")
 
 
 # ==========================================

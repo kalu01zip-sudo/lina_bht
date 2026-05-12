@@ -1,9 +1,12 @@
 import uuid
 from app.core.supabase_client import supabase
-
+from app.utils.image_utils import optimise_image
 
 async def upload_scan_image(file_bytes: bytes, user_id: str):
     try:
+        # Optimise before upload
+        file_bytes, _ = optimise_image(file_bytes, "image/jpeg")
+
         file_name = f"scan/{user_id}/{uuid.uuid4()}.jpg"
 
         supabase.storage.from_("assets").upload(

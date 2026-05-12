@@ -17,15 +17,17 @@ def extract_json(text: str):
     return None
 
 
-# ✅ IMAGE ENCODER
-def encode_image(image_bytes: bytes):
-    return base64.b64encode(image_bytes).decode("utf-8")
-
+from app.utils.image_utils import optimise_image
 
 # ✅ MAIN FUNCTION (ONLY ONE)
 async def analyze_face_with_claude(images: list[bytes]):
 
-    encoded_images = [encode_image(img) for img in images]
+    optimised_images = []
+    for img in images:
+        opt_bytes, _ = optimise_image(img, "image/jpeg")
+        optimised_images.append(opt_bytes)
+
+    encoded_images = [base64.b64encode(img).decode("utf-8") for img in optimised_images]
 
     system_prompt = """
 You are an advanced dermatology AI system.

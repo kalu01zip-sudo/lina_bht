@@ -28,6 +28,23 @@ def get_scan_history(user_id: str, limit: int = 10):
     return result
 
 
+def get_all_scans_for_comparison(user_id: str):
+    """
+    Fetches all scans for a user, sorted by date (oldest first).
+    """
+    scans = scan_collection.find(
+        {"user_id": user_id},
+        {
+            "analysis": 1,
+            "images": 1,
+            "created_at": 1,
+            "user_id": 1
+        }
+    ).sort("created_at", 1)
+    
+    return list(scans)
+
+
 # =========================
 # GET SINGLE SCAN
 # =========================

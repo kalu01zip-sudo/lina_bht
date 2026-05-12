@@ -48,6 +48,7 @@ from pydantic import BaseModel
 
 from app.clients.claude_client import USE_LOCAL_LLM, async_vision_call, is_vision_available
 from app.core.database import get_db
+from app.utils.image_utils import optimise_image
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/scan", tags=["Scan"])
@@ -362,33 +363,6 @@ def _laplacian_variance(image_bytes: bytes) -> float:
     return sum((v - mean) ** 2 for v in lap) / len(lap)
 
 
-# ── Image preprocessing ───────────────────────────────────────────────────────
-
-
-def _optimise_image(image_bytes: bytes, media_type: str) -> tuple[bytes, str]:
-    img = Image.open(io.BytesIO(image_bytes))
-    try:
-        from PIL import ImageOps
-        img = ImageOps.exif_transpose(img)
-    except Exception:
-        pass
-
-    max_dim = max(img.width, img.height)
-    if max_dim > RESIZE_MAX_PX:
-        scale = RESIZE_MAX_PX / max_dim
-        img   = img.resize(
-            (max(1, int(img.width * scale)), max(1, int(img.height * scale))),
-            Image.LANCZOS,
-        )
-
-    if media_type == "image/gif":
-        buf = io.BytesIO()
-        img.convert("RGBA").save(buf, format="PNG", optimize=True)
-        return buf.getvalue(), "image/png"
-
-    buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
-    return buf.getvalue(), "image/jpeg"
 
 
 # ── Per-file validation ───────────────────────────────────────────────────────
@@ -416,7 +390,9 @@ async def _validate_and_prepare(file: UploadFile, idx: int) -> tuple[str, str]:
                    f"'{label}' is too blurry (score {variance:.0f} < {BLUR_THRESHOLD:.0f}). "
                    "Retake in good lighting with the camera steady.")
 
-    optimised, media_type = await asyncio.to_thread(_optimise_image, data, media_type)
+    optimised, media_type = await asyncio.to_thread(
+        optimise_image, data, media_type, RESIZE_MAX_PX, JPEG_QUALITY
+    )
     b64 = base64.standard_b64encode(optimised).decode()
     logger.info("'%s' %.1f KB → %.1f KB (%s)", label, len(data)/1024, len(optimised)/1024, media_type)
     return b64, media_type
