@@ -17,4 +17,5 @@ client = MongoClient(
 
 db = client[db_name]
 scan_collection = db["face_scans"]
+scalp_scan_collection = db["scalp_scans"]
 routine_detail_collection = db["routine_details"]

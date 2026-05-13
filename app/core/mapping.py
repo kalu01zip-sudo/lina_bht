@@ -42,7 +42,18 @@ CONDITION_TO_NUTRITION = {
     "fine_lines": ["collagen", "vitamin_c"],
     "wrinkles": ["collagen"],
     "loss_of_elasticity": ["collagen"],
-    "sun_damage": ["vitamin_c", "vitamin_e"]
+    "sun_damage": ["vitamin_c", "vitamin_e"],
+    # Scalp & Hair
+    "dandruff": ["zinc", "probiotics"],
+    "oily_scalp": ["vitamin_b6"],
+    "dry_scalp": ["omega_3"],
+    "product_buildup": ["zinc"],
+    "hair_thinning": ["biotin", "iron", "protein"],
+    "hair_loss": ["biotin", "iron", "zinc"],
+    "split_ends": ["biotin", "collagen"],
+    "brittle_hair": ["biotin", "collagen"],
+    "scalp_acne": ["zinc", "vitamin_a"],
+    "inflammation": ["omega_3"]
 }
 
 

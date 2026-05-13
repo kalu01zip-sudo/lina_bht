@@ -11,7 +11,7 @@ from app.services.food_service import fetch_foods_by_tags
 from app.services.recipe_service import fetch_recipes_by_tags
 from app.core.recommender import smart_rank
 from app.services.scan_storage import save_scan_result
-from app.services.scan_history import get_scan_history, get_scan_by_id, get_all_scans_for_comparison
+from app.services.scan_history import get_scan_history, get_scan_by_id, get_all_scans_for_comparison, get_scan_analytics
 from app.services.scan_comparison_ai import generate_comparison_message
 from fastapi import HTTPException
 from app.routers.auth import CurrentUser, users_col
@@ -135,6 +135,10 @@ async def scan_history(current_user: CurrentUser):
         "total": len(data),
         "scans": data
     }
+@router.get("/analytics")
+async def scan_analytics(current_user: CurrentUser):
+    user_id = str(current_user["_id"])
+    return get_scan_analytics(user_id)
 
 @router.get("/{scan_id}")
 async def scan_detail(scan_id: str, current_user: CurrentUser):

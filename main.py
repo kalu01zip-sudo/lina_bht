@@ -44,7 +44,9 @@ from app.routers import legal
 from app.routers import admin_legal
 from app.routers import product_scan
 from app.routers import (
-    product_routine
+    product_routine,
+    scalp_scan,
+    scalp_routine
 )
 
 
@@ -107,9 +109,11 @@ app.include_router(onboarding.router)
 app.include_router(profile.router)
 app.include_router(support.router)
 app.include_router(scan.router)
+app.include_router(scalp_scan.router)
 app.include_router(product_scan.router)
 app.include_router(face_routine.router)
 app.include_router(product_routine.router)
+app.include_router(scalp_routine.router)
 app.include_router(routine_detail.router)
 
 app.include_router(subscription_router)
