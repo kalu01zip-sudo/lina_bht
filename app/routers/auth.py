@@ -95,26 +95,29 @@ async def _create_rc_customer(user_id: str):
 
 def _fmt(user: dict) -> dict:
     """Format MongoDB user document for API response."""
+    from app.utils.pregnancy_utils import resolve_pregnancy_phase
+    resolved = resolve_pregnancy_phase(user) or user
     return {
-        "id":                   str(user["_id"]),
-        "email":                user.get("email", ""),
-        "full_name":            user.get("full_name"),
-        "is_verified":          user.get("is_verified", False),
-        "auth_provider":        user.get("auth_provider", "email"),
-        "avatar_url":           user.get("avatar_url"),
-        "apple_id":             user.get("apple_id"),
+        "id":                   str(resolved["_id"]),
+        "email":                resolved.get("email", ""),
+        "full_name":            resolved.get("full_name"),
+        "is_verified":          resolved.get("is_verified", False),
+        "auth_provider":        resolved.get("auth_provider", "email"),
+        "avatar_url":           resolved.get("avatar_url"),
+        "apple_id":             resolved.get("apple_id"),
         # ── Onboarding / skin profile ──────────────────────────────
-        "onboarding_completed": user.get("onboarding_completed", False),
-        "skin_type":            user.get("skin_type"),
-        "hair_type":            user.get("hair_type"),
-        "current_phase":        user.get("current_phase"),
-        "skin_concerns":        user.get("skin_concerns", []),
-        "hair_concerns":        user.get("hair_concerns", []),
-        "allergies":            user.get("allergies", []),
-        "budget":               user.get("budget"),          # budget_friendly | midrange | premium
+        "onboarding_completed": resolved.get("onboarding_completed", False),
+        "skin_type":            resolved.get("skin_type"),
+        "hair_type":            resolved.get("hair_type"),
+        "current_phase":        resolved.get("current_phase"),
+        "life_phase":           resolved.get("life_phase"),
+        "skin_concerns":        resolved.get("skin_concerns", []),
+        "hair_concerns":        resolved.get("hair_concerns", []),
+        "allergies":            resolved.get("allergies", []),
+        "budget":               resolved.get("budget"),          # budget_friendly | midrange | premium
         # ──────────────────────────────────────────────────────────
-        "created_at":           user.get("created_at", datetime.utcnow()).isoformat(),
-        "plan":                 user.get("plan", "free"),    # "free" | "premium"
+        "created_at":           resolved.get("created_at", datetime.utcnow()).isoformat(),
+        "plan":                 resolved.get("plan", "free"),    # "free" | "premium"
     }
 
 
@@ -149,6 +152,8 @@ async def _get_current_user(
     user = await users_col().find_one({"_id": ObjectId(payload["sub"])})
     if not user or not user.get("is_active", True):
         raise HTTPException(status_code=401, detail="User not found or deactivated.")
+    from app.utils.pregnancy_utils import resolve_pregnancy_phase
+    user = resolve_pregnancy_phase(user) or user
     return user
 
 

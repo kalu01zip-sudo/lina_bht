@@ -1,7 +1,8 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from app.core.supabase_client import supabase
+from typing import Optional
 
-router = APIRouter(prefix="/admin", tags=["Admin"])
+router = APIRouter(prefix="/admin", tags=["Admin Upload"])
 
 
 # =========================
@@ -53,7 +54,10 @@ async def upload_image(file: UploadFile, path: str):
         supabase.storage.from_("assets").upload(
             path,
             buffer.read(),
-            file_options={"content-type": "image/jpeg"}
+            file_options={
+                "content-type": "image/jpeg",
+                "x-upsert": "true"
+            }
         )
 
     except Exception as e:
@@ -119,4 +123,69 @@ async def upload_product(
 
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+# ── PRODUCT CRUD (GET, PUT, DELETE) ───────────────────────────────────────────
+
+@router.get("/product")
+async def list_products():
+    res = supabase.table("products").select("*").order("priority", desc=True).execute()
+    return res.data
+
+
+@router.get("/product/{id}")
+async def get_product(id: str):
+    res = supabase.table("products").select("*").eq("id", id).execute()
+    if not res.data:
+        raise HTTPException(404, "Product not found")
+    return res.data[0]
+
+
+@router.put("/product/{id}")
+async def update_product(
+    id: str,
+    file: UploadFile = File(None),
+    name: Optional[str] = Form(None, examples=[""]),
+    category: Optional[str] = Form(None, examples=[""]),
+    tags: Optional[str] = Form(None, examples=[""]),
+    concerns: Optional[str] = Form(None, examples=[""]),
+    priority: Optional[int] = Form(None)
+):
+    existing = supabase.table("products").select("*").eq("id", id).execute()
+    if not existing.data:
+        raise HTTPException(404, "Product not found")
+        
+    updates = {}
+    if name is not None:
+        updates["name"] = name
+    if category is not None:
+        updates["category"] = category.lower()
+    if tags is not None:
+        updates["tags"] = clean_list(tags)
+    if concerns is not None:
+        updates["concerns"] = clean_list(concerns)
+    if priority is not None:
+        updates["priority"] = priority
+        
+    if file:
+        if not file.content_type.startswith("image/"):
+            raise HTTPException(400, "Only image allowed")
+        file_path = f"products/{id}.jpg"
+        await upload_image(file, file_path)
+        updates["image_url"] = get_public_url("assets", file_path)
+        
+    if updates:
+        supabase.table("products").update(updates).eq("id", id).execute()
+        
+    res = supabase.table("products").select("*").eq("id", id).execute()
+    return {"message": "Product updated successfully", "data": res.data[0]}
+
+
+@router.delete("/product/{id}")
+async def delete_product(id: str):
+    existing = supabase.table("products").select("id").eq("id", id).execute()
+    if not existing.data:
+        raise HTTPException(404, "Product not found")
+    supabase.table("products").delete().eq("id", id).execute()
+    return {"message": "Product deleted successfully"}
     

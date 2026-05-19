@@ -259,6 +259,9 @@ async def _get_user_profile(user_id: str) -> dict:
     """
     try:
         doc = await get_db()["users"].find_one({"_id": ObjectId(user_id)})
+        if doc:
+            from app.utils.pregnancy_utils import resolve_pregnancy_phase
+            doc = resolve_pregnancy_phase(doc) or doc
         return doc or {}
     except Exception as exc:
         logger.warning("Could not load profile for user %s: %s", user_id, exc)
@@ -277,6 +280,7 @@ def _build_profile_snapshot(profile: dict) -> dict:
         "hair_type":     profile.get("hair_type"),
         "hair_concerns": profile.get("hair_concerns", []),
         "current_phase": profile.get("current_phase"),
+        "life_phase":    profile.get("life_phase"),
         "allergies":     profile.get("allergies", []),
         "budget":        profile.get("budget"),
     }

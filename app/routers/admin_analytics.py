@@ -39,7 +39,7 @@ from app.core.database import get_db
 from app.routers.admin_auth import _get_current_admin
 
 logger = logging.getLogger(__name__)
-router       = APIRouter(prefix="/admin/analytics", tags=["Admin — Analytics"])
+router       = APIRouter(prefix="/admin/analytics", tags=["Admin Analytics"])
 CurrentAdmin = Annotated[dict, Depends(_get_current_admin)]
 
 

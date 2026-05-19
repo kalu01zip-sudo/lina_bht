@@ -42,6 +42,9 @@ async def save_personal_info(
 
 
 
+from app.utils.pregnancy_utils import resolve_pregnancy_phase
+from datetime import datetime, timezone
+
 # ---------------- LIFE PHASE ----------------
 @router.post("/life_phase")
 async def save_life_phase(
@@ -50,21 +53,39 @@ async def save_life_phase(
 ):
     user_id = current_user["sub"]
 
-    life_phase_value = data.current_phase
+    pregnancy_metadata = {}
 
     if data.current_phase == "other":
         if not data.custom_text:
             raise HTTPException(status_code=400, detail="custom_text required")
         life_phase_value = compress_text(data.custom_text)
+        current_phase_value = life_phase_value
+    else:
+        current_phase_value = data.current_phase
+        if data.custom_text:
+            cleaned_text = data.custom_text.strip()
+            life_phase_value = f"{data.current_phase} ({compress_text(data.custom_text)})"
+            if data.current_phase == "pregnant" and cleaned_text.isdigit():
+                pregnancy_metadata["pregnancy_start_month"] = int(cleaned_text)
+                pregnancy_metadata["pregnancy_month_updated_at"] = datetime.now(timezone.utc)
+        else:
+            life_phase_value = data.current_phase
+
+    update_payload = {
+        "life_phase": life_phase_value,
+        "current_phase": current_phase_value,
+        "onboarding_step": "life_phase"
+    }
+    if pregnancy_metadata:
+        update_payload.update(pregnancy_metadata)
+    else:
+        # Clear old pregnancy metadata if phase is changed
+        update_payload["pregnancy_start_month"] = None
+        update_payload["pregnancy_month_updated_at"] = None
 
     await users_col().update_one(
         {"_id": ObjectId(user_id)},
-        {
-            "$set": {
-                "life_phase": life_phase_value,
-                "onboarding_step": "life_phase"
-            }
-        }
+        {"$set": update_payload}
     )
 
     return {"message": "Life phase saved"}
@@ -78,44 +99,53 @@ async def get_life_phase(
         "_id": ObjectId(current_user["sub"])
     })
 
+    resolved_user = resolve_pregnancy_phase(user)
     return {
-        "life_phase": user.get("life_phase")
+        "life_phase": resolved_user.get("life_phase") if resolved_user else None
     }
 
 @router.patch("/life_phase")
 async def patch_life_phase(
-
     data: LifePhaseRequest,
-
     current_user=Depends(get_current_user)
 ):
-
     user_id = current_user["sub"]
 
-    life_phase_value = data.current_phase
+    pregnancy_metadata = {}
 
     if data.current_phase == "other":
-
         if not data.custom_text:
-
             raise HTTPException(
                 status_code=400,
                 detail="custom_text required"
             )
+        life_phase_value = compress_text(data.custom_text)
+        current_phase_value = life_phase_value
+    else:
+        current_phase_value = data.current_phase
+        if data.custom_text:
+            cleaned_text = data.custom_text.strip()
+            life_phase_value = f"{data.current_phase} ({compress_text(data.custom_text)})"
+            if data.current_phase == "pregnant" and cleaned_text.isdigit():
+                pregnancy_metadata["pregnancy_start_month"] = int(cleaned_text)
+                pregnancy_metadata["pregnancy_month_updated_at"] = datetime.now(timezone.utc)
+        else:
+            life_phase_value = data.current_phase
 
-        life_phase_value = compress_text(
-            data.custom_text
-        )
+    update_payload = {
+        "life_phase": life_phase_value,
+        "current_phase": current_phase_value
+    }
+    if pregnancy_metadata:
+        update_payload.update(pregnancy_metadata)
+    else:
+        # Clear old pregnancy metadata if phase is changed
+        update_payload["pregnancy_start_month"] = None
+        update_payload["pregnancy_month_updated_at"] = None
 
     await users_col().update_one(
-
         {"_id": ObjectId(user_id)},
-
-        {
-            "$set": {
-                "life_phase": life_phase_value
-            }
-        }
+        {"$set": update_payload}
     )
 
     return {

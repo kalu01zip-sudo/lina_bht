@@ -33,7 +33,7 @@ from app.core.supabase_client import supabase
 
 router = APIRouter(
     prefix="/lia",
-    tags=["Lia AI Coach"],
+    tags=["Lia Notification"],
 )
 
 

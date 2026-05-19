@@ -48,6 +48,7 @@ from app.routers import (
     scalp_scan,
     scalp_routine
 )
+from app.routers.articles import router as articles_router, admin_router as admin_articles_router
 
 
 def _llm_label() -> str:
@@ -115,6 +116,7 @@ app.include_router(face_routine.router)
 app.include_router(product_routine.router)
 app.include_router(scalp_routine.router)
 app.include_router(routine_detail.router)
+app.include_router(articles_router)
 
 app.include_router(subscription_router)
 app.include_router(chat_router)
@@ -141,6 +143,8 @@ app.include_router(admin_analytics_router)
 app.include_router(admin_product.router)
 
 app.include_router(saved_routine.router)
+
+app.include_router(admin_articles_router)
 
 app.include_router(admin_video.router)
 app.include_router(legal.router)

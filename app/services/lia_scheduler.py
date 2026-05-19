@@ -56,11 +56,18 @@ async def _get_all_active_users() -> list[dict]:
             "hair_type": 1,
             "hair_concerns": 1,
             "current_phase": 1,
+            "life_phase": 1,
+            "pregnancy_start_month": 1,
+            "pregnancy_month_updated_at": 1,
             "allergies": 1,
             "fcm_tokens": 1,
         },
     )
-    return await cursor.to_list(length=5000)
+    users = await cursor.to_list(length=5000)
+    from app.utils.pregnancy_utils import resolve_pregnancy_phase
+    for u in users:
+        resolve_pregnancy_phase(u)
+    return users
 
 
 async def _get_user_routine_steps(user_id: str, time_filter: str) -> list[dict]:
