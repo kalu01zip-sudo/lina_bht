@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from typing import Annotated, List
 from app.services.face_validation import validate_image
-from app.services.face_ai import analyze_face_with_claude
+from app.services.face_ai import analyze_face_with_claude, verify_same_person
 import json
 import asyncio
 from app.core.mapping import extract_nutrition
@@ -21,12 +21,12 @@ router = APIRouter(prefix="/scan", tags=["Face Scan"])
 
 @router.post("/face")
 async def upload_face_images(
-    files: list[UploadFile],
-    current_user: CurrentUser 
+    current_user: CurrentUser,
+    images: list[UploadFile] = File(...)
 ):
     user_id = str(current_user["_id"])
     
-    if len(files) != 5:
+    if len(images) != 5:
         raise HTTPException(400, "Exactly 5 images required")
 
     errors = []
@@ -34,7 +34,7 @@ async def upload_face_images(
     valid_images = []
     results = []
 
-    for i, file in enumerate(files):
+    for i, file in enumerate(images):
         file_bytes = await file.read()  # ✅ read once
 
         if not file_bytes:
@@ -44,28 +44,28 @@ async def upload_face_images(
             })
             continue
 
-        status = validate_image(file_bytes)
+        # MediaPipe check removed/bypassed so no images are dropped
+        valid_count += 1
+        valid_images.append(file_bytes)
+        results.append(file.filename)
 
-        if status == "ok":
-            valid_count += 1
-            valid_images.append(file_bytes)   # ✅ reuse later for Claude
-            results.append(file.filename)
-        else:
-            errors.append({
-                "image": i + 1,
-                "error": status
-            })
+    if valid_count != 5:
+        raise HTTPException(400, "5 valid images are required")
 
-    # Minimum 3 valid images required
-    if valid_count < 3:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "Not enough valid images",
-                "valid_images": valid_count,
-                "errors": errors
-            }
-        )
+    # ── Identity Check ────────────────────────────────────────────────────
+    try:
+        identity_check = await verify_same_person(valid_images)
+        if not identity_check.get("same_person", False):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Images do not belong to the same person. Reason: {identity_check.get('reason')}"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("IDENTITY CHECK ERROR:", str(e))
+        raise HTTPException(500, f"Identity check failed: {str(e)}")
+    # ──────────────────────────────────────────────────────────────────────
     
     uploaded_image_urls = []
 
