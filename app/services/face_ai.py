@@ -24,7 +24,7 @@ async def analyze_face_with_claude(images: list[bytes]):
 
     optimised_images = []
     for img in images:
-        opt_bytes, _ = optimise_image(img, "image/jpeg")
+        opt_bytes, _ = optimise_image(img, "image/jpeg", max_px=720)
         optimised_images.append(opt_bytes)
 
     encoded_images = [base64.b64encode(img).decode("utf-8") for img in optimised_images]
@@ -137,6 +137,8 @@ cheeks, nose, forehead, chin, under_eye
 10. Hydration target is the amoount of water intake (in ml) recommended to reach optimal skin hydration based on the analysis.
 
 11. Detected conditions MUST be chosen ONLY from this list: acne, blackheads, whiteheads, pores, oiliness, dryness, dehydration, redness, irritation, sensitivity, pigmentation, dark_spots, uneven_tone, dullness, dark_circles, eye_bags, fine_lines, wrinkles, loss_of_elasticity, sun_damage. Return exactly 3 items using exact names only.
+
+12. OVERALL SCORE CALCULATION: Do not output a default or static number. Start at 100 and dynamically deduct points based on the severity of the detected conditions, hydration level, and checked areas. A completely clear face is 95+, mild issues 80-90, moderate 60-79, severe <60. Be highly dynamic.
 """
 
     # ✅ BUILD CONTENT
@@ -161,7 +163,7 @@ cheeks, nose, forehead, chin, under_eye
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=800,
-        temperature=0,
+        temperature=0.4,
         system=system_prompt,
         messages=[
             {
@@ -192,3 +194,59 @@ cheeks, nose, forehead, chin, under_eye
     except Exception as e:
         print("❌ CLAUDE RAW RESPONSE:", response)
         raise Exception(f"Claude parsing failed: {str(e)}")
+
+async def verify_same_person(images: list[bytes]) -> dict:
+    optimised_images = []
+    for img in images:
+        opt_bytes, _ = optimise_image(img, "image/jpeg", max_px=720)
+        optimised_images.append(opt_bytes)
+
+    encoded_images = [base64.b64encode(img).decode("utf-8") for img in optimised_images]
+
+    system_prompt = """
+You are an AI tasked with verifying if all provided images show the same person.
+Return ONLY a JSON object in this exact format:
+{
+  "same_person": true or false,
+  "reason": "brief reason"
+}
+"""
+
+    user_prompt = "Do all these images show the exact same person? Return JSON."
+
+    content = []
+    for img in encoded_images:
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": img
+            }
+        })
+    content.append({
+        "type": "text",
+        "text": user_prompt
+    })
+
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=100,
+            temperature=0.4,
+            system=system_prompt,
+            messages=[{"role": "user", "content": content}]
+        )
+
+        raw_text = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                raw_text += block.text
+
+        clean_json = extract_json(raw_text)
+        if clean_json:
+            return json.loads(clean_json)
+        return {"same_person": False, "reason": "Failed to parse AI response."}
+    except Exception as e:
+        print("ERROR: CLAUDE VERIFY ERROR:", e)
+        return {"same_person": False, "reason": str(e)}
