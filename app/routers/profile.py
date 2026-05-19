@@ -20,6 +20,8 @@ async def get_profile(
 
     return {
 
+        "avatar_url": current_user.get("avatar_url"),
+
         "name": current_user.get("full_name"),
 
         "gmail": current_user.get("email"),
