@@ -25,17 +25,24 @@ async def save_personal_info(
 ):
     user_id = current_user["sub"]
 
+    update_payload = {
+        "country": data.country,
+        "language": data.language,
+        "date_of_birth": data.date_of_birth.isoformat(),
+        "gender": data.gender,
+        "onboarding_step": "personal_info"
+    }
+
+    # If the user is male or other, the life_phase section is skipped.
+    # By default, save current_phase and life_phase as "none", and mark the onboarding step complete.
+    if data.gender in ["male", "other"]:
+        update_payload["current_phase"] = "none"
+        update_payload["life_phase"] = "none"
+        update_payload["onboarding_step"] = "life_phase"
+
     await users_col().update_one(
         {"_id": ObjectId(user_id)},
-        {
-            "$set": {
-                "country": data.country,
-                "language": data.language,
-                "date_of_birth": data.date_of_birth.isoformat(),
-                "gender": data.gender,
-                "onboarding_step": "personal_info"
-            }
-        }
+        {"$set": update_payload}
     )
 
     return {"message": "Personal info saved successfully"}

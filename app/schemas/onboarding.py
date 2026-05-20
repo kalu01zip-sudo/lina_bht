@@ -24,7 +24,8 @@ class LifePhaseRequest(BaseModel):
         "pregnant",
         "postpartum",
         "menopause",
-        "other"
+        "other",
+        "none"
     ]
     custom_text: Optional[str] = None
 
