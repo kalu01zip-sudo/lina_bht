@@ -45,3 +45,4 @@ dmypy.json
 .pyre/
 .pytype/
 .mypy_cache/
+firebase-service-account.json
