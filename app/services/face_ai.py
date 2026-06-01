@@ -27,6 +27,7 @@ async def analyze_face_with_claude(images: list[bytes]):
         opt_bytes, _ = optimise_image(img, "image/jpeg", max_px=640)
         optimised_images.append(opt_bytes)
 
+
     encoded_images = [base64.b64encode(img).decode("utf-8") for img in optimised_images]
 
     system_prompt = """
@@ -134,7 +135,7 @@ cheeks, nose, forehead, chin, under_eye
 
 11. Detected conditions MUST be chosen ONLY from this list: acne, blackheads, whiteheads, pores, oiliness, dryness, dehydration, redness, irritation, sensitivity, pigmentation, dark_spots, uneven_tone, dullness, dark_circles, eye_bags, fine_lines, wrinkles, loss_of_elasticity, sun_damage. Return exactly 3 items using exact names only.
 
-12. OVERALL SCORE CALCULATION: Do not output a default or static number. Start at 100 and dynamically deduct points based on the severity of the detected conditions, hydration level, and checked areas. A completely clear face is 95+, mild issues 80-90, moderate 60-79, severe <60. Be highly dynamic. If any detected condition has "Severe" severity, or if any checked area is <50, overall_score must be <60.
+12. OVERALL SCORE CALCULATION: Do not output a default or static number. Start at 100 and dynamically deduct points based on the severity of the detected conditions, hydration level, and checked areas. A completely clear face is 95+, mild issues 80-90, moderate 60-79, severe <60. Be highly dynamic.
 """
 
     # ✅ BUILD CONTENT

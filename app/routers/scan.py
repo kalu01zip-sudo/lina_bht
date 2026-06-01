@@ -5,7 +5,8 @@ from app.services.face_ai import analyze_face_with_claude, verify_same_person
 import json
 import asyncio
 from app.core.mapping import extract_nutrition
-from app.core.mapping import extract_nutrition
+
+
 from app.services.nutrition_service import fetch_nutritions
 from app.services.food_service import fetch_foods_by_tags
 from app.services.recipe_service import fetch_recipes_by_tags
@@ -44,29 +45,13 @@ async def upload_face_images(
             })
             continue
 
-        validation_status = await asyncio.to_thread(validate_image, file_bytes)
-        if validation_status != "ok":
-            errors.append({
-                "image": i + 1,
-                "filename": file.filename,
-                "error": validation_status
-            })
-            continue
-
+        # MediaPipe check removed/bypassed so no images are dropped
         valid_count += 1
         valid_images.append(file_bytes)
         results.append(file.filename)
 
     if valid_count != 5:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "INVALID_FACE_IMAGES",
-                "message": "Please upload clear face images from different angles. ",
-                "valid_count": valid_count,
-                "errors": errors
-            }
-        )
+        raise HTTPException(400, "5 valid images are required")
 
     # ── Identity Check ────────────────────────────────────────────────────
     try:

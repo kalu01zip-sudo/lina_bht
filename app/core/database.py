@@ -119,8 +119,8 @@ async def create_indexes():
         # Index on plan_type for any future multi-tier lookups.
         await db.plan_config.create_index("plan_type", unique=True, sparse=True)
 
-        print("✅ MongoDB indexes created.")
+        print("[OK] MongoDB indexes created.")
     except Exception as e:
-        print(f"⚠️  MongoDB unavailable for index creation (non-fatal): {str(e)[:100]}")
-        print("   Make sure MongoDB is running on localhost:27017")
-        print("   App will continue but database operations will fail.")
+        print(f"[WARN] MongoDB unavailable for index creation (non-fatal): {str(e)[:100]}")
+        print("   Ensure MongoDB is running on localhost:27017")
+        print("   Application will continue but DB operations may fail.")
