@@ -984,7 +984,14 @@ async def _stream_reply(
         return
 
     if full_reply:
-        await _save_message(user_id, "assistant", "".join(full_reply))
+        reply_text = "".join(full_reply)
+        await _save_message(user_id, "assistant", reply_text)
+        try:
+            from app.services.usage_limiter import record_usage, estimate_tokens
+            tokens = estimate_tokens(reply_text)
+            await record_usage(user_id, "lia_chat", tokens_used=tokens)
+        except Exception as e:
+            logger.error(f"Failed to record usage for {user_id}: {e}")
 
     yield "data: [DONE]\n\n"
 
@@ -1040,6 +1047,12 @@ async def _collect_full_reply(
 
     if full_text:
         await _save_message(user_id, "assistant", full_text)
+        try:
+            from app.services.usage_limiter import record_usage, estimate_tokens
+            tokens = estimate_tokens(full_text)
+            await record_usage(user_id, "lia_chat", tokens_used=tokens)
+        except Exception as e:
+            logger.error(f"Failed to record usage for {user_id}: {e}")
 
     return full_text
 
@@ -1078,6 +1091,12 @@ async def send_message(
     user_text = payload.message.strip()
     if not user_text:
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    # ── Usage Limit Check ──────────────────────────────────────────────────────
+    from app.services.usage_limiter import check_usage_limit, record_usage
+    subscription_status = await _get_subscription_status(user_id)
+    user_plan = "premium" if subscription_status in ("premium", "trialing") else "free"
+    await check_usage_limit(user_id, "lia_chat", user_plan)
 
     # ── 1. Save user message ──────────────────────────────────────────────────
     await _save_message(user_id, "user", user_text)
@@ -1163,6 +1182,12 @@ async def send_message_sync(
     user_text = payload.message.strip()
     if not user_text:
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    # ── Usage Limit Check ──────────────────────────────────────────────────────
+    from app.services.usage_limiter import check_usage_limit, record_usage
+    subscription_status = await _get_subscription_status(user_id)
+    user_plan = "premium" if subscription_status in ("premium", "trialing") else "free"
+    await check_usage_limit(user_id, "lia_chat", user_plan)
 
     # ── 1. Save user message ──────────────────────────────────────────────────
     await _save_message(user_id, "user", user_text)

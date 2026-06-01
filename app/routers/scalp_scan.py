@@ -29,6 +29,10 @@ async def upload_scalp_image(
 ):
     user_id = str(current_user["_id"])
     
+    from app.services.usage_limiter import check_usage_limit, record_usage
+    user_plan = current_user.get("plan", "free")
+    await check_usage_limit(user_id, "scalp_scan", user_plan)
+
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(400, "Empty file")
@@ -75,6 +79,9 @@ async def upload_scalp_image(
         "recipes": recipe_data,
         "images": [url] if url else []
     })
+
+    # Record usage log in MongoDB
+    await record_usage(user_id, "scalp_scan")
 
     return {
         "scan_id": scan_id,

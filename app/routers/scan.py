@@ -27,6 +27,10 @@ async def upload_face_images(
 ):
     user_id = str(current_user["_id"])
     
+    from app.services.usage_limiter import check_usage_limit, record_usage
+    user_plan = current_user.get("plan", "free")
+    await check_usage_limit(user_id, "face_scan", user_plan)
+
     if len(images) != 5:
         raise HTTPException(400, "Exactly 5 images required")
 
@@ -105,6 +109,9 @@ async def upload_face_images(
         "recipes": recipe_data,
         "images": uploaded_image_urls 
     })
+
+    # Record usage log in MongoDB
+    await record_usage(user_id, "face_scan")
 
     # ── Lia: trigger post-scan alert if severe conditions detected ────────
     try:

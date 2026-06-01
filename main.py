@@ -31,6 +31,7 @@ from app.routers.admin_home         import router as admin_home_router
 # from app.routers.admin_products      import router as admin_products_router      
 from app.routers.admin_subscription  import router as admin_subscription_router  
 from app.routers.admin_analytics import router as admin_analytics_router
+from app.routers.admin_limits    import router as admin_limits_router
 from app.routers import onboarding
 from app.routers import admin, scan
 from app.routers import admin_product
@@ -69,6 +70,13 @@ def _llm_label() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_indexes()
+
+    # ── Usage-limiter indexes ─────────────────────────────────────────────
+    try:
+        from app.services.usage_limiter import setup_usage_indexes
+        await setup_usage_indexes()
+    except Exception as exc:
+        print(f"[WARN] Usage-limiter indexes failed (non-fatal): {exc}")
 
     # ── Start Lia notification scheduler ──────────────────────────────────
     try:
@@ -139,6 +147,7 @@ app.include_router(admin_home_router)
 # app.include_router(admin_products_router)      
 app.include_router(admin_subscription_router)  
 app.include_router(admin_analytics_router)
+app.include_router(admin_limits_router)
 
 
 
