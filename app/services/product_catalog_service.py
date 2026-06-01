@@ -4,12 +4,9 @@ import uuid
 
 from PIL import Image
 
-from app.core.supabase_client import (
-    supabase
-)
+from app.core.mongo_client import products_collection
+from app.core.s3_client import _upload_file_sync
 
-
-PRODUCT_IMAGE_BUCKET = "assets"
 PRODUCT_IMAGE_WIDTH = 240
 
 
@@ -25,18 +22,11 @@ def find_product_by_name(
 
         return None
 
-    response = supabase.table(
-        "products"
-    ).select("*").ilike(
-        "name",
-        name
-    ).limit(1).execute()
-
-    if response.data:
-
-        return response.data[0]
-
-    return None
+    # Case-insensitive regex search
+    import re as _re
+    regex = _re.compile(_re.escape(name.strip()), _re.IGNORECASE)
+    doc = products_collection.find_one({"name": regex}, {"_id": 0})
+    return doc
 
 
 # ==========================================
@@ -77,21 +67,12 @@ def clean_list(
     return result
 
 
-def get_public_url(
-    bucket: str,
-
-    path: str
-):
-
-    url = supabase.storage.from_(
-        bucket
-    ).get_public_url(path)
-
-    if isinstance(url, dict):
-
-        return url.get("publicUrl")
-
-    return url
+def get_s3_url(product_id: str) -> str:
+    """Construct the S3 URL for a product image."""
+    import os
+    bucket = os.getenv("AWS_S3_BUCKET", "")
+    region = os.getenv("AWS_REGION", "us-east-1")
+    return f"https://{bucket}.s3.{region}.amazonaws.com/products/{product_id}.jpg"
 
 
 def resize_product_image(
@@ -133,31 +114,17 @@ def resize_product_image(
 
 def upload_resized_product_image(
     image_bytes: bytes,
-
     product_id: str
 ):
-
     resized = resize_product_image(
         image_bytes
     )
 
     path = f"products/{product_id}.jpg"
 
-    supabase.storage.from_(
-        PRODUCT_IMAGE_BUCKET
-    ).upload(
-        path,
-        resized,
-        file_options={
-            "content-type": "image/jpeg",
-            "x-upsert": "true"
-        }
-    )
+    _upload_file_sync(resized, path, "image/jpeg")
 
-    return get_public_url(
-        PRODUCT_IMAGE_BUCKET,
-        path
-    )
+    return get_s3_url(product_id)
 
 
 # ==========================================
@@ -187,7 +154,6 @@ def create_product_if_missing(
         )
 
     existing = find_product_by_name(
-
         product_name
     )
 
@@ -198,24 +164,14 @@ def create_product_if_missing(
         ):
 
             image_url = upload_resized_product_image(
-
                 image_bytes=image_bytes,
-
                 product_id=existing["id"]
             )
 
-            updated = supabase.table(
-                "products"
-            ).update({
-                "image_url": image_url
-            }).eq(
-                "id",
-                existing["id"]
-            ).execute()
-
-            if updated.data:
-
-                return updated.data[0]
+            products_collection.update_one(
+                {"id": existing["id"]},
+                {"$set": {"image_url": image_url}}
+            )
 
             existing["image_url"] = image_url
 
@@ -227,23 +183,16 @@ def create_product_if_missing(
 
     product_id = base_id
 
-    existing_id = supabase.table(
-        "products"
-    ).select("id").eq(
-        "id",
-        product_id
-    ).execute()
+    existing_id = products_collection.find_one({"id": product_id})
 
-    if existing_id.data:
+    if existing_id:
 
         product_id = f"{base_id}_{uuid.uuid4().hex[:8]}"
 
     if image_bytes and not image_url:
 
         image_url = upload_resized_product_image(
-
             image_bytes=image_bytes,
-
             product_id=product_id
         )
 
@@ -278,14 +227,8 @@ def create_product_if_missing(
         "priority": 99
     }
 
-    response = supabase.table(
-        "products"
-    ).insert(
-        payload
-    ).execute()
-
-    if response.data:
-
-        return response.data[0]
+    products_collection.insert_one({**payload})
+    # Remove _id from return value
+    payload.pop("_id", None)
 
     return payload

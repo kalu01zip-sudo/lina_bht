@@ -12,6 +12,12 @@ from app.routers.auth import CurrentUser
 from app.services.image_storage import upload_scan_image
 import asyncio
 from app.core.mapping import extract_nutrition
+from app.core.mongo_client import (
+    fetch_all_detected_conditions,
+    nutritions_collection,
+    foods_collection,
+    recipes_collection
+)
 from app.services.nutrition_service import fetch_nutritions
 from app.services.food_service import fetch_foods_by_tags
 from app.services.recipe_service import fetch_recipes_by_tags
@@ -53,9 +59,12 @@ async def upload_scalp_image(
             }
         )
 
+    # Fetch allowed conditions dynamically
+    allowed_conditions = fetch_all_detected_conditions()
+
     # Call AI
     try:
-        ai_data = await analyze_scalp_with_claude(file_bytes)
+        ai_data = await analyze_scalp_with_claude(file_bytes, allowed_conditions)
     except Exception as e:
         raise HTTPException(500, f"Scalp AI failed: {str(e)}")
 
@@ -63,10 +72,32 @@ async def upload_scalp_image(
     url = await upload_scan_image(file_bytes, user_id)
 
     # RECOMMENDATIONS
-    nutrition_ids = extract_nutrition(ai_data)
-    nutrition_data = fetch_nutritions(nutrition_ids)
-    raw_foods = fetch_foods_by_tags(nutrition_ids)
-    raw_recipes = fetch_recipes_by_tags(nutrition_ids)
+    detected_condition_names = []
+    for c in ai_data.get("detected_condition", []):
+        cname = c.get("name")
+        if cname:
+            detected_condition_names.append(cname.strip().lower().replace(" ", "_"))
+
+    # Fetch matching recommendations directly from MongoDB collections based on conditions
+    nutrition_cursor = nutritions_collection.find({"detected_condition": {"$in": detected_condition_names}})
+    nutrition_data = []
+    for doc in nutrition_cursor:
+        doc["_id"] = str(doc["_id"])
+        nutrition_data.append(doc)
+
+    nutrition_ids = [n["id"] for n in nutrition_data]
+
+    food_cursor = foods_collection.find({"detected_condition": {"$in": detected_condition_names}})
+    raw_foods = []
+    for doc in food_cursor:
+        doc["_id"] = str(doc["_id"])
+        raw_foods.append(doc)
+
+    recipe_cursor = recipes_collection.find({"detected_condition": {"$in": detected_condition_names}})
+    raw_recipes = []
+    for doc in recipe_cursor:
+        doc["_id"] = str(doc["_id"])
+        raw_recipes.append(doc)
 
     food_data = smart_rank(raw_foods, nutrition_ids, ai_data)
     recipe_data = smart_rank(raw_recipes, nutrition_ids, ai_data)

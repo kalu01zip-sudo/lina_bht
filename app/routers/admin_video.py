@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from app.core.supabase_client import supabase
+from app.core.s3_client import upload_file_to_s3, delete_file_from_s3
+from app.core.mongo_client import routine_videos_collection
 import uuid
 from typing import Optional
 
@@ -13,65 +14,42 @@ def clean_tags(tags: str):
     return [
         x.strip().lower().replace(" ", "_")
         for x in tags.split(",")
+        if x.strip()
     ]
 
 
 @router.post("/video")
 async def upload_routine_video(
-
     file: UploadFile = File(...),
-
     title: str = Form(...),
-
     tags: str = Form(...),
-
     phase: str = Form(...),
-
     product_category: str = Form(...),
-
     priority: int = Form(1)
 ):
-
     try:
-
         video_id = str(uuid.uuid4())
-
-        path = f"{video_id}.mp4"
-
         video_bytes = await file.read()
 
-        supabase.storage \
-            .from_("routine-videos") \
-            .upload(
-                path,
-                video_bytes,
-                file_options={
-                    "content-type": file.content_type
-                }
-            )
+        # Upload to S3
+        s3_path = f"routine-videos/{video_id}.mp4"
+        video_url = await upload_file_to_s3(
+            video_bytes,
+            s3_path,
+            file.content_type or "video/mp4"
+        )
 
-        video_url = supabase.storage \
-            .from_("routine-videos") \
-            .get_public_url(path)
-
-        supabase.table("routine_videos") \
-            .insert({
-
-                "id": video_id,
-
-                "title": title,
-
-                "video_url": video_url,
-
-                "tags": clean_tags(tags),
-
-                "phase": phase,
-
-                "product_category": product_category,
-
-                "priority": priority
-            }) \
-            .execute()
+        # Save metadata to MongoDB
+        doc = {
+            "id": video_id,
+            "title": title,
+            "video_url": video_url,
+            "tags": clean_tags(tags),
+            "phase": phase,
+            "product_category": product_category,
+            "priority": priority
+        }
+        routine_videos_collection.insert_one(doc)
 
         return {
             "success": True,
@@ -79,12 +57,10 @@ async def upload_routine_video(
         }
 
     except Exception as e:
-
         print("VIDEO UPLOAD ERROR:", e)
-
         raise HTTPException(
             status_code=500,
-            detail="Video upload failed"
+            detail=f"Video upload failed: {str(e)}"
         )
 
 
@@ -92,16 +68,21 @@ async def upload_routine_video(
 
 @router.get("/video")
 async def list_videos():
-    res = supabase.table("routine_videos").select("*").order("priority", desc=True).execute()
-    return res.data
+    cursor = routine_videos_collection.find({}).sort("priority", -1)
+    results = []
+    for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        results.append(doc)
+    return results
 
 
 @router.get("/video/{id}")
 async def get_video(id: str):
-    res = supabase.table("routine_videos").select("*").eq("id", id).execute()
-    if not res.data:
+    doc = routine_videos_collection.find_one({"id": id})
+    if not doc:
         raise HTTPException(404, "Video not found")
-    return res.data[0]
+    doc["_id"] = str(doc["_id"])
+    return doc
 
 
 @router.put("/video/{id}")
@@ -114,10 +95,10 @@ async def update_video(
     product_category: Optional[str] = Form(None, examples=[""]),
     priority: Optional[int] = Form(None)
 ):
-    existing = supabase.table("routine_videos").select("*").eq("id", id).execute()
-    if not existing.data:
+    existing = routine_videos_collection.find_one({"id": id})
+    if not existing:
         raise HTTPException(404, "Video not found")
-        
+
     updates = {}
     if title is not None:
         updates["title"] = title
@@ -129,35 +110,37 @@ async def update_video(
         updates["product_category"] = product_category
     if priority is not None:
         updates["priority"] = priority
-        
+
     if file:
         file_bytes = await file.read()
-        file_path = f"{id}.mp4"
-        supabase.storage.from_("routine-videos").upload(
-            file_path,
+        s3_path = f"routine-videos/{id}.mp4"
+        video_url = await upload_file_to_s3(
             file_bytes,
-            file_options={
-                "content-type": file.content_type,
-                "x-upsert": "true"
-            }
+            s3_path,
+            file.content_type or "video/mp4"
         )
-        url_res = supabase.storage.from_("routine-videos").get_public_url(file_path)
-        if isinstance(url_res, dict):
-            updates["video_url"] = url_res.get("publicUrl")
-        else:
-            updates["video_url"] = url_res
-            
+        updates["video_url"] = video_url
+
     if updates:
-        supabase.table("routine_videos").update(updates).eq("id", id).execute()
-        
-    res = supabase.table("routine_videos").select("*").eq("id", id).execute()
-    return {"message": "Video updated successfully", "data": res.data[0]}
+        routine_videos_collection.update_one({"id": id}, {"$set": updates})
+
+    res = routine_videos_collection.find_one({"id": id})
+    res["_id"] = str(res["_id"])
+    return {"message": "Video updated successfully", "data": res}
 
 
 @router.delete("/video/{id}")
 async def delete_video(id: str):
-    existing = supabase.table("routine_videos").select("id").eq("id", id).execute()
-    if not existing.data:
+    existing = routine_videos_collection.find_one({"id": id}, {"id": 1, "video_url": 1})
+    if not existing:
         raise HTTPException(404, "Video not found")
-    supabase.table("routine_videos").delete().eq("id", id).execute()
+
+    # Delete from S3
+    try:
+        s3_path = f"routine-videos/{id}.mp4"
+        await delete_file_from_s3(s3_path)
+    except Exception as e:
+        print(f"[WARN] S3 delete failed for video {id}: {e}")
+
+    routine_videos_collection.delete_one({"id": id})
     return {"message": "Video deleted successfully"}

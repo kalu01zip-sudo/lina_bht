@@ -14,7 +14,7 @@ def extract_json(text: str):
         return text[start:end+1]
     return None
 
-async def analyze_scalp_with_claude(image_bytes: bytes):
+async def analyze_scalp_with_claude(image_bytes: bytes, allowed_conditions: list[str] = None):
     # Optimise image
     opt_bytes, _ = optimise_image(image_bytes, "image/jpeg", max_px=640)
     encoded_image = base64.b64encode(opt_bytes).decode("utf-8")
@@ -118,6 +118,14 @@ top, crown, sides, hairline
 
 9. OVERALL SCORE AND SCALP HEALTH CALCULATION: Do not output a default or static number. Start at 100 and dynamically deduct points based on the severity of the detected conditions, checked areas, and visible issues. A completely clear scalp is 95+, mild issues 80-90, moderate 60-79, severe <60. Be highly dynamic. If any detected condition has "Severe" severity, or if any checked area is <50, overall_score and scalp_health must be <60.
 """
+    if not allowed_conditions:
+        allowed_conditions = ["dandruff", "oily_scalp", "dry_scalp", "redness", "inflammation", "sensitivity", "product_buildup", "hair_thinning", "hair_loss", "split_ends", "brittle_hair", "scalp_acne"]
+    conditions_str = ", ".join(allowed_conditions)
+    user_prompt = user_prompt.replace(
+        "dandruff, oily_scalp, dry_scalp, redness, inflammation, sensitivity, product_buildup, hair_thinning, hair_loss, split_ends, brittle_hair, scalp_acne",
+        conditions_str
+    )
+
 
     content = [
         {

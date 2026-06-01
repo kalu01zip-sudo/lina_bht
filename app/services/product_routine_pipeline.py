@@ -21,9 +21,7 @@ from app.services.routine_duplicate_checker import (
     check_duplicate_product
 )
 
-from app.core.supabase_client import (
-    supabase
-)
+from app.core.mongo_client import saved_routines_collection
 
 from app.services.routine_product_injector import (
     inject_products_into_routine
@@ -45,14 +43,14 @@ def get_saved_routines(
     user_id: str
 ):
 
-    response = supabase.table(
-        "saved_routines"
-    ).select("*").eq(
-        "user_id",
-        user_id
-    ).execute()
-
-    return response.data
+    try:
+        results = list(saved_routines_collection.find(
+            {"user_id": user_id},
+            {"_id": 0}
+        ))
+        return results
+    except Exception:
+        return []
 
 
 # ==========================================

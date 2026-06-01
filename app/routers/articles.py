@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from app.routers.auth import CurrentUser
 from app.routers.admin_auth import CurrentAdmin
 from app.core.database import get_db
-from app.core.supabase_client import supabase
+from app.core.s3_client import upload_file_to_s3
 
 router = APIRouter(prefix="/articles", tags=["Article"])
 admin_router = APIRouter(prefix="/admin/articles", tags=["Admin Upload"])
@@ -66,28 +66,23 @@ class ArticleDetailResponse(BaseModel):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SUPABASE UPLOAD HELPERS
+#  S3 UPLOAD HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def upload_file_to_supabase(bucket: str, file: UploadFile, file_path: str) -> str:
-    """Helper to upload media (covers/videos) to Supabase Storage and get public URL."""
+async def upload_file_to_s3_helper(bucket: str, file: UploadFile, file_path: str) -> str:
+    """Helper to upload media (covers/videos) to S3 and get public URL."""
     try:
         file_bytes = await file.read()
-        supabase.storage.from_(bucket).upload(
-            file_path,
+        full_s3_path = f"{bucket}/{file_path}"
+        url = await upload_file_to_s3(
             file_bytes,
-            file_options={
-                "content-type": file.content_type,
-                "x-upsert": "true"
-            }
+            full_s3_path,
+            file.content_type or "image/png"
         )
-        url_res = supabase.storage.from_(bucket).get_public_url(file_path)
-        if isinstance(url_res, dict):
-            return url_res.get("publicUrl")
-        return url_res
+        return url
     except Exception as e:
-        print(f"[ERROR] SUPABASE UPLOAD ERROR ({bucket}):", e)
-        raise HTTPException(500, f"Upload to bucket '{bucket}' failed: {str(e)}")
+        print(f"[ERROR] S3 UPLOAD ERROR ({bucket}):", e)
+        raise HTTPException(500, f"Upload to S3 failed: {str(e)}")
 
 
 def _fmt_article(doc: dict) -> dict:
@@ -218,7 +213,7 @@ async def create_article(
         if not ext:
             ext = ".png"
         file_path = f"articles/{article_id}_cover{ext}"
-        final_image_url = await upload_file_to_supabase("assets", image_file, file_path)
+        final_image_url = await upload_file_to_s3_helper("assets", image_file, file_path)
 
     # Video upload
     final_video_url = video_url
@@ -227,7 +222,7 @@ async def create_article(
         if not ext:
             ext = ".mp4"
         file_path = f"articles/{article_id}_video{ext}"
-        final_video_url = await upload_file_to_supabase("routine-videos", video_file, file_path)
+        final_video_url = await upload_file_to_s3_helper("routine-videos", video_file, file_path)
 
     doc = {
         "_id": ObjectId(article_id),
@@ -312,7 +307,7 @@ async def update_article(
         if not ext:
             ext = ".png"
         file_path = f"articles/{article_id}_cover{ext}"
-        updates["image_url"] = await upload_file_to_supabase("assets", image_file, file_path)
+        updates["image_url"] = await upload_file_to_s3_helper("assets", image_file, file_path)
     elif image_url is not None:
         updates["image_url"] = image_url
 
@@ -322,7 +317,7 @@ async def update_article(
         if not ext:
             ext = ".mp4"
         file_path = f"articles/{article_id}_video{ext}"
-        updates["video_url"] = await upload_file_to_supabase("routine-videos", video_file, file_path)
+        updates["video_url"] = await upload_file_to_s3_helper("routine-videos", video_file, file_path)
     elif video_url is not None:
         updates["video_url"] = video_url
 

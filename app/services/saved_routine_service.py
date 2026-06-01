@@ -1,14 +1,12 @@
-from app.core.supabase_client import supabase
-
+from app.core.mongo_client import saved_routines_collection
 
 def fetch_saved_routine(routine_id: str):
-
-    response = supabase.table("saved_routines") \
-        .select("*") \
-        .eq("id", routine_id) \
-        .limit(1) \
-        .execute()
-
-    data = response.data or []
-
-    return data[0] if data else None
+    try:
+        doc = saved_routines_collection.find_one({"id": routine_id})
+        if doc:
+            doc["_id"] = str(doc["_id"])
+            return doc
+        return None
+    except Exception as e:
+        print("[ERROR] Saved routine fetch error:", e)
+        return None

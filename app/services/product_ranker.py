@@ -1,6 +1,4 @@
-from app.core.supabase_client import (
-    supabase
-)
+from app.core.mongo_client import products_collection
 
 
 # ==========================================
@@ -8,11 +6,8 @@ from app.core.supabase_client import (
 # ==========================================
 
 def score_product(
-
     product: dict,
-
     user_concerns: list,
-
     allergies: list
 ):
 
@@ -80,25 +75,19 @@ def score_product(
 # ==========================================
 
 def fetch_best_product(
-
     category: str,
-
     user_concerns: list,
-
     allergies: list
 ):
-
-    response = supabase.table(
-        "products"
-    ).select("*").eq(
-        "category",
-        category
-    ).execute()
-
-    products = response.data
+    try:
+        products = list(products_collection.find(
+            {"category": category},
+            {"_id": 0}
+        ))
+    except Exception:
+        return None
 
     if not products:
-
         return None
 
     ranked = []
@@ -106,27 +95,18 @@ def fetch_best_product(
     for product in products:
 
         score = score_product(
-
             product=product,
-
-            user_concerns=
-                user_concerns,
-
-            allergies=
-                allergies
+            user_concerns=user_concerns,
+            allergies=allergies
         )
 
         ranked.append({
-
             "score": score,
-
             "product": product
         })
 
     ranked.sort(
-
         key=lambda x: x["score"],
-
         reverse=True
     )
 

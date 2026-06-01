@@ -59,7 +59,7 @@ async def scan_product(
         )
 
         # ==================================
-        # SAVE PRODUCT TO SUPABASE
+        # SAVE PRODUCT TO CATALOG (MongoDB & S3)
         # ==================================
 
         catalog_product = create_product_if_missing(

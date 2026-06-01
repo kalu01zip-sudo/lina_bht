@@ -20,7 +20,7 @@ def extract_json(text: str):
 from app.utils.image_utils import optimise_image
 
 # ✅ MAIN FUNCTION (ONLY ONE)
-async def analyze_face_with_claude(images: list[bytes]):
+async def analyze_face_with_claude(images: list[bytes], allowed_conditions: list[str] = None):
 
     optimised_images = []
     for img in images:
@@ -137,6 +137,13 @@ cheeks, nose, forehead, chin, under_eye
 
 12. OVERALL SCORE CALCULATION: Do not output a default or static number. Start at 100 and dynamically deduct points based on the severity of the detected conditions, hydration level, and checked areas. A completely clear face is 95+, mild issues 80-90, moderate 60-79, severe <60. Be highly dynamic.
 """
+    if not allowed_conditions:
+        allowed_conditions = ["acne", "blackheads", "whiteheads", "pores", "oiliness", "dryness", "dehydration", "redness", "irritation", "sensitivity", "pigmentation", "dark_spots", "uneven_tone", "dullness", "dark_circles", "eye_bags", "fine_lines", "wrinkles", "loss_of_elasticity", "sun_damage"]
+    conditions_str = ", ".join(allowed_conditions)
+    user_prompt = user_prompt.replace(
+        "acne, blackheads, whiteheads, pores, oiliness, dryness, dehydration, redness, irritation, sensitivity, pigmentation, dark_spots, uneven_tone, dullness, dark_circles, eye_bags, fine_lines, wrinkles, loss_of_elasticity, sun_damage",
+        conditions_str
+    )
 
     # ✅ BUILD CONTENT
     content = []

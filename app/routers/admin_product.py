@@ -1,6 +1,9 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from app.core.supabase_client import supabase
 from typing import Optional
+from PIL import Image
+import io
+from app.core.s3_client import upload_file_to_s3
+from app.core.mongo_client import products_collection
 
 router = APIRouter(prefix="/admin", tags=["Admin Upload"])
 
@@ -17,17 +20,7 @@ def clean_list(data: str):
     return [x.strip().lower().replace(" ", "_") for x in data.split(",") if x]
 
 
-def get_public_url(bucket: str, path: str):
-    url = supabase.storage.from_(bucket).get_public_url(path)
-    if isinstance(url, dict):
-        return url.get("publicUrl")
-    return url
-
-
-from PIL import Image
-import io
-
-async def upload_image(file: UploadFile, path: str):
+async def upload_image(file: UploadFile, path: str) -> str:
     try:
         contents = await file.read()
 
@@ -50,15 +43,9 @@ async def upload_image(file: UploadFile, path: str):
         image.save(buffer, format="JPEG", quality=85)
         buffer.seek(0)
 
-        # upload to supabase
-        supabase.storage.from_("assets").upload(
-            path,
-            buffer.read(),
-            file_options={
-                "content-type": "image/jpeg",
-                "x-upsert": "true"
-            }
-        )
+        # upload to S3
+        url = await upload_file_to_s3(buffer.read(), path, "image/jpeg")
+        return url
 
     except Exception as e:
         print("UPLOAD ERROR:", e)
@@ -90,22 +77,16 @@ async def upload_product(
         concerns_list = clean_list(concerns)
 
         # check duplicate
-        existing = supabase.table("products") \
-            .select("id") \
-            .eq("id", id) \
-            .execute()
-
-        if existing.data:
+        existing = products_collection.find_one({"id": id})
+        if existing:
             raise HTTPException(400, "Product ID already exists")
 
         # upload image
         file_path = f"products/{id}.jpg"
-        await upload_image(file, file_path)
-
-        public_url = get_public_url("assets", file_path)
+        public_url = await upload_image(file, file_path)
 
         # insert into DB
-        supabase.table("products").insert({
+        products_collection.insert_one({
             "id": id,
             "name": name,
             "image_url": public_url,
@@ -113,7 +94,7 @@ async def upload_product(
             "tags": tags_list,          
             "concerns": concerns_list,  
             "priority": priority
-        }).execute()
+        })
 
         return {
             "message": "Product uploaded successfully",
@@ -121,6 +102,8 @@ async def upload_product(
             "image_url": public_url
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -129,16 +112,21 @@ async def upload_product(
 
 @router.get("/product")
 async def list_products():
-    res = supabase.table("products").select("*").order("priority", desc=True).execute()
-    return res.data
+    cursor = products_collection.find({}).sort("priority", -1)
+    results = []
+    for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        results.append(doc)
+    return results
 
 
 @router.get("/product/{id}")
 async def get_product(id: str):
-    res = supabase.table("products").select("*").eq("id", id).execute()
-    if not res.data:
+    doc = products_collection.find_one({"id": id})
+    if not doc:
         raise HTTPException(404, "Product not found")
-    return res.data[0]
+    doc["_id"] = str(doc["_id"])
+    return doc
 
 
 @router.put("/product/{id}")
@@ -151,8 +139,8 @@ async def update_product(
     concerns: Optional[str] = Form(None, examples=[""]),
     priority: Optional[int] = Form(None)
 ):
-    existing = supabase.table("products").select("*").eq("id", id).execute()
-    if not existing.data:
+    existing = products_collection.find_one({"id": id})
+    if not existing:
         raise HTTPException(404, "Product not found")
         
     updates = {}
@@ -171,21 +159,21 @@ async def update_product(
         if not file.content_type.startswith("image/"):
             raise HTTPException(400, "Only image allowed")
         file_path = f"products/{id}.jpg"
-        await upload_image(file, file_path)
-        updates["image_url"] = get_public_url("assets", file_path)
+        public_url = await upload_image(file, file_path)
+        updates["image_url"] = public_url
         
     if updates:
-        supabase.table("products").update(updates).eq("id", id).execute()
+        products_collection.update_one({"id": id}, {"$set": updates})
         
-    res = supabase.table("products").select("*").eq("id", id).execute()
-    return {"message": "Product updated successfully", "data": res.data[0]}
+    res = products_collection.find_one({"id": id})
+    res["_id"] = str(res["_id"])
+    return {"message": "Product updated successfully", "data": res}
 
 
 @router.delete("/product/{id}")
 async def delete_product(id: str):
-    existing = supabase.table("products").select("id").eq("id", id).execute()
-    if not existing.data:
+    existing = products_collection.find_one({"id": id})
+    if not existing:
         raise HTTPException(404, "Product not found")
-    supabase.table("products").delete().eq("id", id).execute()
+    products_collection.delete_one({"id": id})
     return {"message": "Product deleted successfully"}
-    

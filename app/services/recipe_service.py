@@ -1,8 +1,5 @@
-# app/services/recipe_service.py
-
-from app.core.supabase_client import supabase
+from app.core.mongo_client import recipes_collection
 from app.core.tag_mapper import expand_tags
-
 
 def fetch_recipes_by_tags(nutrition_ids: list[str], limit: int = 6):
     if not nutrition_ids:
@@ -12,14 +9,20 @@ def fetch_recipes_by_tags(nutrition_ids: list[str], limit: int = 6):
     expanded_tags = expand_tags(nutrition_ids)
 
     try:
-        response = supabase.table("recipes") \
-            .select("*") \
-            .overlaps("tags", expanded_tags) \
-            .limit(limit) \
-            .execute()
-
-        return response.data or []
+        cursor = recipes_collection.find({
+            "$or": [
+                {"main_ingredients": {"$in": expanded_tags}},
+                {"detected_condition": {"$in": expanded_tags}},
+                {"tags": {"$in": expanded_tags}}
+            ]
+        }).limit(limit)
+        
+        results = []
+        for doc in cursor:
+            doc["_id"] = str(doc["_id"])
+            results.append(doc)
+        return results
 
     except Exception as e:
         print("[ERROR] Recipe fetch error:", e)
-        return []
+        return []

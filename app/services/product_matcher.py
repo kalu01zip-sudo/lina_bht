@@ -1,41 +1,39 @@
-from app.core.supabase_client import supabase
+import logging
+from app.core.mongo_client import products_collection
 
 
 def match_product(category: str, focus: str):
     category = category.lower().replace(" ", "_")
     focus = focus.lower().replace(" ", "_")
-    res = supabase.table("products") \
-        .select("*") \
-        .eq("category", category) \
-        .contains("concerns", [focus]) \
-        .order("priority", desc=False) \
-        .limit(1) \
-        .execute()
 
-    if res.data:
-        return res.data[0]
+    # Try to find a product matching both category and concern
+    doc = products_collection.find_one(
+        {"category": category, "concerns": focus},
+        {"_id": 0},
+        sort=[("priority", 1)]
+    )
 
-    # fallback
-    res = supabase.table("products") \
-        .select("*") \
-        .eq("category", category) \
-        .limit(1) \
-        .execute()
+    if doc:
+        return doc
 
-    return res.data[0] if res.data else None
+    # fallback — any product in category
+    doc = products_collection.find_one(
+        {"category": category},
+        {"_id": 0}
+    )
+    return doc
+
 
 def get_all_categories():
     try:
-        res = supabase.table("products") \
-            .select("category") \
-            .execute()
-
-        categories = list(set([p["category"] for p in res.data]))
-        return categories
+        categories = products_collection.distinct("category")
+        return list(set(c for c in categories if c))
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning("Failed to fetch product categories from Supabase (network/db offline): %s", exc)
+        logging.getLogger(__name__).warning(
+            "Failed to fetch product categories from MongoDB: %s", exc
+        )
         return ["cleanser", "serum", "moisturizer", "sunscreen", "mask"]
+
 
 def normalize_category(cat: str):
     mapping = {

@@ -7,8 +7,8 @@ from pydantic import (
 )
 from typing import List
 
-from app.core.supabase_client import (
-    supabase
+from app.core.mongo_client import (
+    saved_routines_collection
 )
 
 from app.routers.auth import (
@@ -73,14 +73,13 @@ def _reset_stale_weekly_steps(rows: list[dict]) -> list[dict]:
 
     if stale_ids:
 
-        supabase.table(
-            "saved_routines"
-        ).update({
-            "is_completed": False,
-            "completed_at": None
-        }).in_(
-            "id", stale_ids
-        ).execute()
+        saved_routines_collection.update_many(
+            {"id": {"$in": stale_ids}},
+            {"$set": {
+                "is_completed": False,
+                "completed_at": None
+            }}
+        )
 
     return rows
 
@@ -167,17 +166,13 @@ async def save_routine(
                 "completed_at": None
             })
 
-        result = supabase.table(
-            "saved_routines"
-        ).insert(
-            rows
-        ).execute()
+        saved_routines_collection.insert_many(rows)
 
         return {
             "success": True,
             "saved_count": len(rows),
             "routine_step_id": body.routine_step_id,
-            "data": result.data
+            "data": rows
         }
 
     except HTTPException:
@@ -210,17 +205,12 @@ async def mark_step_complete(
             current_user["_id"]
         )
 
-        existing_step = supabase.table(
-            "saved_routines"
-        ).select(
-            "id, user_id, time, is_completed"
-        ).eq(
-            "id", step_id
-        ).eq(
-            "user_id", user_id
-        ).execute()
+        existing_step = saved_routines_collection.find_one(
+            {"id": step_id, "user_id": user_id},
+            {"id": 1, "user_id": 1, "time": 1, "is_completed": 1, "_id": 0}
+        )
 
-        if not existing_step.data:
+        if not existing_step:
 
             raise HTTPException(
                 status_code=404,
@@ -231,23 +221,25 @@ async def mark_step_complete(
             timezone.utc
         ).isoformat()
 
-        result = supabase.table(
-            "saved_routines"
-        ).update({
-            "is_completed": True,
-            "completed_at": completed_at
-        }).eq(
-            "id", step_id
-        ).eq(
-            "user_id", user_id
-        ).execute()
+        saved_routines_collection.update_one(
+            {"id": step_id, "user_id": user_id},
+            {"$set": {
+                "is_completed": True,
+                "completed_at": completed_at
+            }}
+        )
+
+        updated_step = saved_routines_collection.find_one(
+            {"id": step_id, "user_id": user_id},
+            {"_id": 0}
+        )
 
         return {
             "success": True,
             "step_id": step_id,
             "is_completed": True,
             "completed_at": completed_at,
-            "data": result.data[0] if result.data else None
+            "data": updated_step
         }
 
     except HTTPException:
@@ -281,17 +273,12 @@ async def delete_routine_step(
         )
 
         # Verify the step exists and belongs to the current user
-        existing_step = supabase.table(
-            "saved_routines"
-        ).select(
-            "*"
-        ).eq(
-            "id", step_id
-        ).eq(
-            "user_id", user_id
-        ).execute()
+        existing_step = saved_routines_collection.find_one(
+            {"id": step_id, "user_id": user_id},
+            {"_id": 0}
+        )
 
-        if not existing_step.data:
+        if not existing_step:
 
             raise HTTPException(
                 status_code=404,
@@ -299,11 +286,9 @@ async def delete_routine_step(
             )
 
         # Delete the step
-        result = supabase.table(
-            "saved_routines"
-        ).delete().eq(
-            "id", step_id
-        ).execute()
+        saved_routines_collection.delete_one(
+            {"id": step_id, "user_id": user_id}
+        )
 
         return {
             "success": True,
@@ -341,20 +326,14 @@ async def get_all_saved_routines(
         )
 
         # Fetch all routine steps for the current user
-        result = supabase.table(
-            "saved_routines"
-        ).select(
-            "*"
-        ).eq(
-            "user_id", user_id
-        ).order(
-            "time",
-            desc=False
-        ).execute()
+        cursor = saved_routines_collection.find(
+            {"user_id": user_id},
+            {"_id": 0}
+        ).sort("time", 1)
 
-        data = _reset_stale_weekly_steps(
-            result.data or []
-        )
+        rows = list(cursor)
+
+        data = _reset_stale_weekly_steps(rows)
 
         return {
             "success": True,

@@ -3,8 +3,6 @@ from fastapi import (
     HTTPException
 )
 
-from app.core.supabase_client import supabase
-
 
 router = APIRouter(
     prefix="/legal",
@@ -16,23 +14,18 @@ router = APIRouter(
 # INTERNAL FETCH
 # ======================================
 
+from app.core.mongo_client import legal_contents_collection
+
 def fetch_page(page_id: str):
-
-    response = supabase.table(
-        "legal_contents"
-    ).select("*").eq(
-        "id",
-        page_id
-    ).execute()
-
-    if not response.data:
-
+    doc = legal_contents_collection.find_one({"id": page_id})
+    if not doc:
         raise HTTPException(
             status_code=404,
             detail="Page not found"
         )
+    doc["_id"] = str(doc["_id"])
+    return doc
 
-    return response.data[0]
 
 
 # ======================================

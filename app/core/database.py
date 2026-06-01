@@ -55,6 +55,31 @@ def products_col():
 def plan_config_col():
     return get_db()["plan_config"]
 
+def nutritions_col():
+    return get_db()["nutritions"]
+
+def foods_col():
+    return get_db()["foods"]
+
+def recipes_col():
+    return get_db()["recipes"]
+
+def saved_routines_col():
+    return get_db()["saved_routines"]
+
+def routine_videos_col():
+    return get_db()["routine_videos"]
+
+def lia_notifications_col():
+    return get_db()["lia_notifications"]
+
+def legal_contents_col():
+    return get_db()["legal_contents"]
+
+def support_tickets_col():
+    return get_db()["support_tickets"]
+
+
 
 async def create_indexes():
     """Create MongoDB indexes on startup — safe to run multiple times."""
@@ -125,6 +150,17 @@ async def create_indexes():
             "processed_at",
             expireAfterSeconds=7 * 24 * 3600,   # 7 days TTL
         )
+
+        # ── Migrated collections from Supabase ───────────────────────────────────────
+        await db.nutritions.create_index("id", unique=True)
+        await db.foods.create_index("id", unique=True)
+        await db.recipes.create_index("id", unique=True)
+        await db.saved_routines.create_index("id", unique=True, sparse=True)
+        await db.saved_routines.create_index("user_id")
+        await db.routine_videos.create_index([("phase", ASCENDING), ("product_category", ASCENDING)])
+        await db.lia_notifications.create_index("user_id")
+        await db.lia_notifications.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+        await db.legal_contents.create_index("id", unique=True)
 
         print("[OK] MongoDB indexes created.")
     except Exception as e:

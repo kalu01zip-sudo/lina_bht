@@ -1,6 +1,4 @@
-from app.core.supabase_client import (
-    supabase
-)
+from app.core.mongo_client import saved_routines_collection
 
 from app.services.generate_manual_routine_ai import (
     generate_manual_routine_ai
@@ -245,17 +243,9 @@ def save_simple_manual_routine(
         "why": manual_product["instruction"]
     }
 
-    response = supabase.table(
-        "saved_routines"
-    ).insert(
-        row
-    ).execute()
+    saved_routines_collection.insert_one({**row})
 
-    saved = (
-        response.data[0]
-        if response.data
-        else row
-    )
+    saved = row
 
     return {
         "saved": True,

@@ -170,7 +170,7 @@ async def _get_user_memories(user_id: str) -> list[str]:
 async def _get_routine_steps(user_id: str) -> dict[str, list[dict]]:
     """
     Fetch the user's current routine steps, grouped by time_slot.
-    Checks BOTH MongoDB `routine_steps` AND Supabase `saved_routines`.
+    Checks BOTH MongoDB `routine_steps` AND MongoDB `saved_routines`.
 
     Returns a dict with keys "morning", "night", "weekly".
     Each value is a list of step dicts:
@@ -201,20 +201,18 @@ async def _get_routine_steps(user_id: str) -> dict[str, list[dict]]:
             "is_completed":  doc.get("completed_date") == date.today().isoformat(),
         })
 
-    # Source 2: Supabase saved_routines (if MongoDB was empty)
+    # Source 2: MongoDB saved_routines (if MongoDB routine_steps was empty)
     has_mongo_steps = any(grouped.get(s) for s in ("morning", "night", "weekly"))
 
     if not has_mongo_steps:
         try:
-            from app.core.supabase_client import supabase as sb
-            response = sb.table("saved_routines") \
-                .select("*") \
-                .eq("user_id", uid_str) \
-                .execute()
+            from app.core.mongo_client import saved_routines_collection
+            cursor = saved_routines_collection.find({"user_id": uid_str}, {"_id": 0})
+            rows = list(cursor)
 
-            for row in (response.data or []):
+            for row in rows:
                 time_slot = row.get("time", "morning")
-                # Map "night" from supabase to match grouped keys
+                # Map "night" to match grouped keys
                 if time_slot not in grouped:
                     if time_slot in ("evening", "night"):
                         time_slot = "night"
@@ -229,7 +227,7 @@ async def _get_routine_steps(user_id: str) -> dict[str, list[dict]]:
                     "is_completed":  False,
                 })
         except Exception as exc:
-            logger.warning("Supabase routine fetch failed: %s", exc)
+            logger.warning("MongoDB saved_routines fetch failed: %s", exc)
 
     return grouped
 

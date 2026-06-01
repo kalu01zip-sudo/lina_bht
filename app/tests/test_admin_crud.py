@@ -4,7 +4,6 @@ import io
 import uuid
 from PIL import Image
 from main import app
-from app.core.supabase_client import supabase
 
 def get_dummy_image():
     img = Image.new("RGB", (10, 10), color="blue")
@@ -29,8 +28,10 @@ def run_tests():
         data={
             "id": nut_id,
             "name": "Test Nutrition",
-            "benefit": "Great for testing",
-            "tags": "test,healthy",
+            "main_ingredient": "Test Ingredient",
+            "detected_condition": "acne,dryness",
+            "how_it_improves": "Great for testing",
+            "links": "http://example.com/test",
             "priority": 10
         },
         files={"file": ("test.png", dummy_image, "image/png")}
@@ -59,7 +60,7 @@ def run_tests():
         f"/admin/nutrition/{nut_id}",
         data={
             "name": "Updated Nutrition Name",
-            "benefit": "Even better benefit",
+            "how_it_improves": "Even better benefit",
             "priority": 25
         },
         files={"file": ("test_upd.png", dummy_image2, "image/png")}
@@ -90,11 +91,14 @@ def run_tests():
         data={
             "id": food_id,
             "name": "Test Food",
-            "tags": "test,organic"
+            "ingredients": "Test Ingredient",
+            "detected_condition": "acne,dryness",
+            "benefits": "Test benefits",
+            "links": "http://example.com/food"
         },
         files={"file": ("food.png", dummy_image, "image/png")}
     )
-    assert post_res.status_code == 200
+    assert post_res.status_code == 200, f"Food creation failed: {post_res.text}"
     print("[PASS] POST /admin/food")
 
     # GET List
@@ -138,14 +142,16 @@ def run_tests():
         "/admin/recipe",
         data={
             "id": rec_id,
-            "name": "Test Recipe",
-            "description": "Tasty and testable",
-            "meal_type": "breakfast",
-            "tags": "healthy,quick"
+            "recipe_name": "Test Recipe",
+            "main_ingredients": "Test Ingredient",
+            "detected_condition": "acne,dryness",
+            "how_it_improves": "Tasty and testable",
+            "tags": "healthy,quick",
+            "links": "http://example.com/recipe"
         },
         files={"file": ("recipe.png", dummy_image, "image/png")}
     )
-    assert post_res.status_code == 200
+    assert post_res.status_code == 200, f"Recipe creation failed: {post_res.text}"
     print("[PASS] POST /admin/recipe")
 
     # GET List
@@ -157,20 +163,18 @@ def run_tests():
     # GET Single
     get_single_res = client.get(f"/admin/recipe/{rec_id}")
     assert get_single_res.status_code == 200
-    assert get_single_res.json()["name"] == "Test Recipe"
+    assert get_single_res.json()["recipe_name"] == "Test Recipe"
     print("[PASS] GET /admin/recipe/{id}")
 
     # PUT Update
     put_res = client.put(
         f"/admin/recipe/{rec_id}",
         data={
-            "name": "Updated Recipe Name",
-            "meal_type": "lunch"
+            "recipe_name": "Updated Recipe Name"
         }
     )
     assert put_res.status_code == 200
-    assert put_res.json()["data"]["name"] == "Updated Recipe Name"
-    assert put_res.json()["data"]["meal_type"] == "lunch"
+    assert put_res.json()["data"]["recipe_name"] == "Updated Recipe Name"
     print("[PASS] PUT /admin/recipe/{id}")
 
     # DELETE

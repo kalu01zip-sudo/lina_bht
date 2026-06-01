@@ -4,7 +4,7 @@ from app.routers.auth import CurrentUser, users_col
 from datetime import datetime, timedelta
 from typing import Optional
 import uuid
-from app.core.supabase_client import supabase
+from app.core.s3_client import upload_file_to_s3
 
 
 router = APIRouter(
@@ -401,22 +401,11 @@ async def update_profile_edit(
 
             file_bytes = await avatar.read()
 
-            supabase.storage \
-                .from_("avatars") \
-                .upload(
-
-                    filename,
-
-                    file_bytes,
-
-                    file_options={
-                        "content-type": avatar.content_type
-                    }
-                )
-
-            avatar_url = supabase.storage \
-                .from_("avatars") \
-                .get_public_url(filename)
+            avatar_url = await upload_file_to_s3(
+                file_bytes,
+                f"avatars/{filename}",
+                avatar.content_type or "image/png"
+            )
 
             update_data["avatar_url"] = avatar_url
 

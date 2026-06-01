@@ -20,7 +20,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.core.database import get_db
-from app.core.supabase_client import supabase
+from app.core.mongo_client import saved_routines_collection
 
 from app.services.lia_coaching_engine import (
     trigger_morning_routine,
@@ -71,14 +71,15 @@ async def _get_all_active_users() -> list[dict]:
 
 
 async def _get_user_routine_steps(user_id: str, time_filter: str) -> list[dict]:
-    """Fetch routine steps from Supabase for a specific time (morning/night)."""
+    """Fetch routine steps from MongoDB for a specific time (morning/night)."""
     try:
-        response = supabase.table("saved_routines") \
-            .select("*") \
-            .eq("user_id", user_id) \
-            .eq("time", time_filter) \
-            .execute()
-        return response.data or []
+        cursor = await asyncio.to_thread(
+            lambda: list(saved_routines_collection.find(
+                {"user_id": user_id, "time": time_filter},
+                {"_id": 0}
+            ))
+        )
+        return cursor
     except Exception:
         return []
 
@@ -253,19 +254,16 @@ async def run_periodic_checks():
 
 
 async def run_daily_routine_reset():
-    """Midnight - reset daily routine completion state."""
+    """Midnight — reset daily routine completion state in MongoDB."""
     logger.info("[Lia Scheduler] Resetting daily routine completion state...")
 
-    def _reset_daily_routines():
-        return supabase.table("saved_routines") \
-            .update({
-                "is_completed": False,
-                "completed_at": None,
-            }) \
-            .in_("time", ["morning", "night"]) \
-            .execute()
+    def _reset():
+        saved_routines_collection.update_many(
+            {"time": {"$in": ["morning", "night"]}},
+            {"$set": {"is_completed": False, "completed_at": None}},
+        )
 
-    await asyncio.to_thread(_reset_daily_routines)
+    await asyncio.to_thread(_reset)
     logger.info("[Lia Scheduler] Daily routine reset complete.")
 
 

@@ -1,8 +1,6 @@
 import random
 
-from app.core.supabase_client import (
-    supabase
-)
+from app.core.mongo_client import products_collection
 
 
 # ==========================================
@@ -10,21 +8,17 @@ from app.core.supabase_client import (
 # ==========================================
 
 def fetch_product_by_category(
-
     category: str
 ):
+    try:
+        products = list(products_collection.find(
+            {"category": category},
+            {"_id": 0}
+        ).limit(20))
 
-    response = supabase.table(
-        "products"
-    ).select("*").eq(
-        "category",
-        category
-    ).limit(20).execute()
+        if not products:
+            return None
 
-    products = response.data
-
-    if not products:
-
+        return random.choice(products)
+    except Exception:
         return None
-
-    return random.choice(products)

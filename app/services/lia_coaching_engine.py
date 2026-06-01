@@ -3,11 +3,11 @@
 Lia Coaching Engine — the brain of the notification system.
 
 Each trigger function:
-  1. Queries user data from MongoDB / Supabase
+  1. Queries user data from MongoDB
   2. Checks if condition is met
   3. Anti-spam check (skip if same trigger sent recently)
   4. Calls Claude to generate a personalized 1-2 sentence message
-  5. Saves notification to Supabase
+  5. Saves notification to MongoDB
   6. Sends FCM push to user's device(s)
 """
 
@@ -18,7 +18,6 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from app.clients.claude_client import ClaudeClient
-from app.core.supabase_client import supabase
 from app.services.lia_notification_service import (
     save_notification,
     has_recent_notification,
@@ -107,7 +106,7 @@ def _deliver_notification(
     message: str,
     data: dict = None,
 ):
-    """Save to Supabase + send FCM push."""
+    """Save to MongoDB + send FCM push."""
     # Save to database
     save_notification(
         user_id=user_id,

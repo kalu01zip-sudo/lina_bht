@@ -27,8 +27,7 @@ from app.services.lia_coaching_engine import (
     generate_on_demand_coaching,
 )
 
-from app.core.mongo_client import scan_collection
-from app.core.supabase_client import supabase
+from app.core.mongo_client import scan_collection, saved_routines_collection
 
 
 router = APIRouter(
@@ -166,13 +165,12 @@ async def get_coaching_message(
         sort=[("created_at", -1)],
     )
 
-    # Fetch routine steps
     try:
-        routine_response = supabase.table("saved_routines") \
-            .select("*") \
-            .eq("user_id", user_id) \
-            .execute()
-        routine_steps = routine_response.data or []
+        cursor = saved_routines_collection.find({"user_id": user_id})
+        routine_steps = []
+        for doc in cursor:
+            doc["_id"] = str(doc["_id"])
+            routine_steps.append(doc)
     except Exception:
         routine_steps = []
 

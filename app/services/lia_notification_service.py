@@ -1,11 +1,12 @@
 # app/services/lia_notification_service.py
 """
-CRUD operations for the lia_notifications Supabase table.
+CRUD operations for the lia_notifications MongoDB collection.
 Handles saving, fetching, reading, and anti-spam checks.
 """
 
+import uuid
 from datetime import datetime, timezone, timedelta
-from app.core.supabase_client import supabase
+from app.core.mongo_client import lia_notifications_collection
 
 
 def save_notification(
@@ -15,18 +16,25 @@ def save_notification(
     message: str,
     data: dict = None,
 ) -> dict | None:
-    """Insert a notification into Supabase. Returns the inserted row."""
+    """Insert a notification into MongoDB. Returns the inserted row."""
     try:
-        response = supabase.table("lia_notifications").insert({
+        doc_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc).isoformat()
+        
+        doc = {
+            "id": doc_id,
             "user_id": user_id,
             "trigger": trigger,
             "title": title,
             "message": message,
             "data": data or {},
             "is_read": False,
-        }).execute()
-
-        return response.data[0] if response.data else None
+            "created_at": created_at
+        }
+        
+        lia_notifications_collection.insert_one(doc)
+        doc["_id"] = str(doc["_id"])
+        return doc
 
     except Exception as e:
         print(f"[Lia] Notification save error: {e}")
@@ -40,19 +48,17 @@ def get_user_notifications(
 ) -> list[dict]:
     """Fetch notifications for a user, newest first."""
     try:
-        query = supabase.table("lia_notifications") \
-            .select("*") \
-            .eq("user_id", user_id)
-
+        query = {"user_id": user_id}
         if unread_only:
-            query = query.eq("is_read", False)
+            query["is_read"] = False
 
-        response = query \
-            .order("created_at", desc=True) \
-            .limit(limit) \
-            .execute()
-
-        return response.data or []
+        cursor = lia_notifications_collection.find(query).sort("created_at", -1).limit(limit)
+        
+        results = []
+        for doc in cursor:
+            doc["_id"] = str(doc["_id"])
+            results.append(doc)
+        return results
 
     except Exception as e:
         print(f"[Lia] Notification fetch error: {e}")
@@ -62,13 +68,10 @@ def get_user_notifications(
 def get_unread_count(user_id: str) -> int:
     """Count unread notifications for a user."""
     try:
-        response = supabase.table("lia_notifications") \
-            .select("id", count="exact") \
-            .eq("user_id", user_id) \
-            .eq("is_read", False) \
-            .execute()
-
-        return response.count or 0
+        return lia_notifications_collection.count_documents({
+            "user_id": user_id,
+            "is_read": False
+        })
 
     except Exception as e:
         print(f"[Lia] Unread count error: {e}")
@@ -78,13 +81,11 @@ def get_unread_count(user_id: str) -> int:
 def mark_read(notification_id: str, user_id: str) -> bool:
     """Mark a single notification as read."""
     try:
-        response = supabase.table("lia_notifications") \
-            .update({"is_read": True}) \
-            .eq("id", notification_id) \
-            .eq("user_id", user_id) \
-            .execute()
-
-        return bool(response.data)
+        res = lia_notifications_collection.update_one(
+            {"id": notification_id, "user_id": user_id},
+            {"$set": {"is_read": True}}
+        )
+        return res.modified_count > 0 or res.matched_count > 0
 
     except Exception as e:
         print(f"[Lia] Mark read error: {e}")
@@ -94,13 +95,11 @@ def mark_read(notification_id: str, user_id: str) -> bool:
 def mark_all_read(user_id: str) -> int:
     """Mark all notifications as read. Returns count updated."""
     try:
-        response = supabase.table("lia_notifications") \
-            .update({"is_read": True}) \
-            .eq("user_id", user_id) \
-            .eq("is_read", False) \
-            .execute()
-
-        return len(response.data) if response.data else 0
+        res = lia_notifications_collection.update_many(
+            {"user_id": user_id, "is_read": False},
+            {"$set": {"is_read": True}}
+        )
+        return res.modified_count
 
     except Exception as e:
         print(f"[Lia] Mark all read error: {e}")
@@ -121,16 +120,14 @@ def has_recent_notification(
             datetime.now(timezone.utc) - timedelta(hours=hours)
         ).isoformat()
 
-        response = supabase.table("lia_notifications") \
-            .select("id") \
-            .eq("user_id", user_id) \
-            .eq("trigger", trigger) \
-            .gte("created_at", cutoff) \
-            .limit(1) \
-            .execute()
-
-        return bool(response.data)
+        doc = lia_notifications_collection.find_one({
+            "user_id": user_id,
+            "trigger": trigger,
+            "created_at": {"$gte": cutoff}
+        })
+        return doc is not None
 
     except Exception as e:
         print(f"[Lia] Recent check error: {e}")
         return True  # fail-safe: assume sent → don't spam
+

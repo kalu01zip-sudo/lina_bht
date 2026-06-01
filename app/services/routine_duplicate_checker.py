@@ -1,6 +1,4 @@
-from app.core.supabase_client import (
-    supabase
-)
+from app.core.mongo_client import saved_routines_collection
 
 
 # ==========================================
@@ -8,20 +6,14 @@ from app.core.supabase_client import (
 # ==========================================
 
 def check_duplicate_product(
-
     user_id: str,
-
     product_name: str
 ):
-
-    response = supabase.table(
-        "saved_routines"
-    ).select("*").eq(
-        "user_id",
-        user_id
-    ).eq(
-        "product_name",
-        product_name
-    ).execute()
-
-    return len(response.data) > 0
+    try:
+        count = saved_routines_collection.count_documents({
+            "user_id": user_id,
+            "product_name": product_name
+        })
+        return count > 0
+    except Exception:
+        return False

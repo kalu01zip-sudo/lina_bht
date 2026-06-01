@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr
 
-from app.core.supabase_client import supabase
+from app.core.mongo_client import support_tickets_collection
 
 from app.services.email_service import (
     send_support_email
@@ -42,22 +42,19 @@ async def create_support_ticket(
     try:
 
         # ==========================
-        # SAVE TO SUPABASE
+        # SAVE TO MONGODB
         # ==========================
 
-        response = supabase.table(
-            "support_tickets"
-        ).insert({
-
+        ticket_doc = {
             "name": data.name,
-
             "email": data.email,
-
             "subject": data.subject,
-
             "about": data.about
+        }
 
-        }).execute()
+        support_tickets_collection.insert_one(ticket_doc)
+
+        ticket_doc["_id"] = str(ticket_doc["_id"])
 
         # ==========================
         # SEND EMAIL TO USER
@@ -90,7 +87,7 @@ Our team will contact you soon.
 
             "success": True,
 
-            "ticket": response.data[0]
+            "ticket": ticket_doc
         }
 
     except Exception as e:

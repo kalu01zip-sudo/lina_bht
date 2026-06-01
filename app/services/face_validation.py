@@ -1,8 +1,6 @@
 import cv2
 import numpy as np
 from fastapi import HTTPException
-import mediapipe as mp
-
 # Load face detector
 face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
@@ -22,7 +20,6 @@ def read_image(file_bytes: bytes):
 
     return image
 
-mp_face = mp.solutions.face_detection
 
 def resize_image(image, max_width=800):
     h, w = image.shape[:2]
@@ -36,52 +33,45 @@ def resize_image(image, max_width=800):
 
     return image
 
+
 def check_face(image):
-    with mp_face.FaceDetection(model_selection=1, min_detection_confidence=0.60) as face_detection:
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results = face_detection.process(rgb)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+    )
 
-        if not results.detections:
-            return "no_face"
+    if len(faces) == 0:
+        return "no_face"
 
-        if len(results.detections) > 1:
-            return "multiple_faces"
+    if len(faces) > 1:
+        return "multiple_faces"
 
-        detection = results.detections[0]
+    x, y, face_w, face_h = faces[0]
+    h, w, _ = image.shape
 
-        # 🔥 confidence (strong)
-        if detection.score[0] < 0.45:
-            return "low_confidence"
+    # 🔥 size check
+    if face_w < 120 or face_h < 120:
+        return "face_too_small"
 
-        h, w, _ = image.shape
-        bbox = detection.location_data.relative_bounding_box
+    if face_w > w * 0.9 or face_h > h * 0.9:
+        return "invalid_face_size"
 
-        face_width = bbox.width * w
-        face_height = bbox.height * h
+    # 🔥 shape check (VERY IMPORTANT)
+    aspect_ratio = face_w / face_h
+    if aspect_ratio < 0.6 or aspect_ratio > 1.6:
+        return "invalid_face_shape"
 
-        # 🔥 size check
-        if face_width < 120 or face_height < 120:
-            return "face_too_small"
+    # 🔥 position check
+    center_x = x + face_w / 2
+    center_y = y + face_h / 2
 
-        if face_width > w * 0.9 or face_height > h * 0.9:
-            return "invalid_face_size"
+    if center_x < w * 0.3 or center_x > w * 0.7:
+        return "face_not_centered"
 
-        # 🔥 shape check (VERY IMPORTANT)
-        aspect_ratio = face_width / face_height
-        if aspect_ratio < 0.6 or aspect_ratio > 1.6:
-            return "invalid_face_shape"
+    if center_y < h * 0.3 or center_y > h * 0.7:
+        return "face_not_centered"
 
-        # 🔥 position check
-        center_x = (bbox.xmin + bbox.width / 2) * w
-        center_y = (bbox.ymin + bbox.height / 2) * h
-
-        if center_x < w * 0.3 or center_x > w * 0.7:
-            return "face_not_centered"
-
-        if center_y < h * 0.3 or center_y > h * 0.7:
-            return "face_not_centered"
-
-        return "ok"
+    return "ok"
     
 def check_face_size(image, detection):
     h, w, _ = image.shape

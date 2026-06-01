@@ -5,8 +5,7 @@ from typing import Any
 from bson import ObjectId
 from fastapi import APIRouter
 
-from app.core.mongo_client import scalp_scan_collection, scan_collection
-from app.core.supabase_client import supabase
+from app.core.mongo_client import scalp_scan_collection, scan_collection, saved_routines_collection
 from app.routers.auth import CurrentUser
 from app.routers.saved_routine import _reset_stale_weekly_steps
 
@@ -54,20 +53,14 @@ def _fetch_last_scans(user_id: str) -> tuple[dict | None, dict | None]:
 
 
 def _fetch_routine_summary(user_id: str) -> dict:
-    result = supabase.table(
-        "saved_routines"
-    ).select(
-        "id, time, product_name, is_completed, completed_at"
-    ).eq(
-        "user_id", user_id
-    ).order(
-        "time",
-        desc=False
-    ).execute()
+    cursor = saved_routines_collection.find(
+        {"user_id": user_id},
+        {"id": 1, "time": 1, "product_name": 1, "is_completed": 1, "completed_at": 1, "_id": 0}
+    ).sort("time", 1)
 
-    rows = _reset_stale_weekly_steps(
-        result.data or []
-    )
+    rows = list(cursor)
+
+    rows = _reset_stale_weekly_steps(rows)
 
     return {
         "count": len(rows),
