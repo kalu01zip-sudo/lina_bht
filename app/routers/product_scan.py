@@ -155,7 +155,7 @@ async def scan_product(
     except Exception as e:
 
         print(
-            "❌ PRODUCT SCAN ERROR:",
+            "[ERROR] PRODUCT SCAN ERROR:",
             e
         )
 
@@ -221,7 +221,7 @@ async def get_product_history(
     except Exception as e:
 
         print(
-            "❌ PRODUCT HISTORY ERROR:",
+            "[ERROR] PRODUCT HISTORY ERROR:",
             e
         )
 
@@ -282,7 +282,7 @@ async def get_single_product_scan(
     except Exception as e:
 
         print(
-            "❌ PRODUCT DETAIL ERROR:",
+            "[ERROR] PRODUCT DETAIL ERROR:",
             e
         )
 

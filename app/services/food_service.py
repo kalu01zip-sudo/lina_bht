@@ -18,5 +18,5 @@ def fetch_foods_by_tags(nutrition_ids: list[str], limit: int = 10):
         return response.data or []
 
     except Exception as e:
-        print("❌ Food fetch error:", e)
+        print("[ERROR] Food fetch error:", e)
         return []

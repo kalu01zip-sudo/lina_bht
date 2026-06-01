@@ -21,5 +21,5 @@ def fetch_recipes_by_tags(nutrition_ids: list[str], limit: int = 6):
         return response.data or []
 
     except Exception as e:
-        print("❌ Recipe fetch error:", e)
+        print("[ERROR] Recipe fetch error:", e)
         return []

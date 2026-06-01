@@ -57,5 +57,5 @@ async def generate_scalp_routine(
     except HTTPException:
         raise
     except Exception as e:
-        print("❌ SCALP ROUTINE ERROR:", e)
+        print("[ERROR] SCALP ROUTINE ERROR:", e)
         raise HTTPException(status_code=500, detail="Failed to generate scalp routine")

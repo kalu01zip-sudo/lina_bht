@@ -16,5 +16,5 @@ def fetch_nutritions(nutrition_ids: list[str]):
         return response.data or []
 
     except Exception as e:
-        print("❌ Nutrition fetch error:", e)
+        print("[ERROR] Nutrition fetch error:", e)
         return []

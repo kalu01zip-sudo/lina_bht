@@ -69,7 +69,7 @@ async def _create_rc_customer(user_id: str):
         project_id = os.getenv("REVENUECAT_PROJECT_ID", "")
 
         if not rc_v2_key or not project_id:
-            print("⚠️  RC not configured — skipping customer creation.")
+            print("[WARN] RC not configured -- skipping customer creation.")
             return
 
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -82,11 +82,11 @@ async def _create_rc_customer(user_id: str):
                 json={"id": user_id},
             )
         if resp.status_code in (200, 201):
-            print(f"✅ RC customer created: {user_id}")
+            print(f"[OK] RC customer created: {user_id}")
         else:
-            print(f"⚠️  RC customer creation returned {resp.status_code}: {resp.text[:100]}")
+            print(f"[WARN] RC customer creation returned {resp.status_code}: {resp.text[:100]}")
     except Exception as e:
-        print(f"⚠️  RC customer creation failed (non-fatal): {e}")
+        print(f"[WARN] RC customer creation failed (non-fatal): {e}")
 
 
 # ─────────────────────────────────────────────────
@@ -482,7 +482,7 @@ async def google_signin(body: GoogleAuthRequest):
 #    4. Backend verifies token with Apple's public keys
 #    5. Creates or finds existing user → returns tokens
 #
-#  ⚠️ Apple only sends full_name on the VERY FIRST login.
+#  [WARN] Apple only sends full_name on the VERY FIRST login.
 #     Your app must forward it that one time and you must save it.
 # ─────────────────────────────────────────────────
 

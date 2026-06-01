@@ -86,7 +86,7 @@ async def upload_file_to_supabase(bucket: str, file: UploadFile, file_path: str)
             return url_res.get("publicUrl")
         return url_res
     except Exception as e:
-        print(f"❌ SUPABASE UPLOAD ERROR ({bucket}):", e)
+        print(f"[ERROR] SUPABASE UPLOAD ERROR ({bucket}):", e)
         raise HTTPException(500, f"Upload to bucket '{bucket}' failed: {str(e)}")
 
 

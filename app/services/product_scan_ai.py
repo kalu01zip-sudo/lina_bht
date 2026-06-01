@@ -325,7 +325,7 @@ Return ONLY JSON in this exact format:
     except Exception as e:
 
         print(
-            "❌ PRODUCT AI ERROR:",
+            "[ERROR] PRODUCT AI ERROR:",
             response
         )
 

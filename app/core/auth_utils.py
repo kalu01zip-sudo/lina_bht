@@ -97,7 +97,7 @@ def generate_otp() -> str:
 # ── Email ─────────────────────────────────────────────────────
 def _send_email(to: str, subject: str, html: str) -> bool:
     if not SMTP_USER or not SMTP_PASSWORD:
-        print(f"\n📧 [EMAIL MOCK] To: {to}\nSubject: {subject}\n{html}\n")
+        print(f"\n[EMAIL MOCK] To: {to}\nSubject: {subject}\n{html}\n")
         return True
     try:
         msg = MIMEMultipart("alternative")
@@ -111,7 +111,7 @@ def _send_email(to: str, subject: str, html: str) -> bool:
             s.sendmail(FROM_EMAIL, to, msg.as_string())
         return True
     except Exception as e:
-        print(f"❌ Email error: {e}")
+        print(f"[ERROR] Email error: {e}")
         return False
 
 def send_verification_email(to: str, name: str, otp: str) -> bool:

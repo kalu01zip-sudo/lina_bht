@@ -14,7 +14,6 @@
 ║    GET  /subscription/status         → current plan + trial status      ║
 ║    POST /subscription/cancel         → returns store cancel deep-link   ║
 ║    POST /subscription/webhook        → RevenueCat lifecycle events      ║
-║    GET  /subscription/debug-rc/{id}  → DEV ONLY, remove in prod        ║
 ║                                                                          ║
 ║  RevenueCat Dashboard Setup (one-time):                                  ║
 ║    1. Products                                                           ║
@@ -51,14 +50,14 @@ import os
 import logging
 import httpx
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing   import Optional, Annotated
 from fastapi  import APIRouter, Depends, HTTPException, Request, Header
 from bson     import ObjectId
 from pydantic import BaseModel
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from app.core.database import users_col, subscriptions_col
+from app.core.database import get_db, users_col, subscriptions_col
 from app.core.auth_utils import decode_access_token
 
 logger = logging.getLogger(__name__)
@@ -72,6 +71,7 @@ RC_V2_API_KEY         = os.environ.get("REVENUECAT_V2_API_KEY", "")
 RC_PROJECT_ID         = os.environ.get("REVENUECAT_PROJECT_ID", "")
 RC_WEBHOOK_AUTH_TOKEN = os.environ.get("REVENUECAT_WEBHOOK_AUTH_TOKEN", "")
 RC_ENTITLEMENT_ID     = os.environ.get("RC_ENTITLEMENT_ID", "")
+ADMIN_SECRET          = os.environ.get("ADMIN_SECRET", "")
 
 RC_V2_BASE = "https://api.revenuecat.com/v2"
 
@@ -137,7 +137,12 @@ async def _require_auth(
 
 def _require_admin(x_admin_secret: Optional[str] = Header(None)) -> None:
     """Pass X-Admin-Secret header equal to ADMIN_SECRET from .env."""
-    if ADMIN_SECRET and x_admin_secret != ADMIN_SECRET:
+    if not ADMIN_SECRET:
+        raise HTTPException(
+            status_code=503,
+            detail="ADMIN_SECRET is not configured on the server.",
+        )
+    if x_admin_secret != ADMIN_SECRET:
         raise HTTPException(status_code=403, detail="Invalid admin secret.")
 
 
@@ -157,6 +162,8 @@ async def _fetch_active_entitlements(app_user_id: str) -> list:
     Item shape:
       { "entitlement_id": "entlXXX",  ← RC internal object ID (not display name)
         "expires_at": <ms> | null,    ← null = lifetime / no expiry
+        "lookup_key": "GIXY Premium", ← the identifier you set in RC dashboard
+        "product_id": "skinsense_premium_monthly",
         "object": "customer.active_entitlement" }
 
     RC only returns ACTIVE ones — no need to filter expiry on our side.
@@ -178,16 +185,22 @@ async def _fetch_active_entitlements(app_user_id: str) -> list:
     return resp.json().get("items", [])
 
 
+def _utc_now() -> datetime:
+    """Return current UTC time as a naive datetime (matches MongoDB convention)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _ms_to_dt(ms) -> Optional[datetime]:
+    """Convert millisecond timestamp to naive UTC datetime."""
     if not ms:
         return None
-    return datetime.utcfromtimestamp(int(ms) / 1000)
+    return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).replace(tzinfo=None)
 
 
 def _days_remaining(expires_at: Optional[datetime]) -> Optional[int]:
     if not expires_at:
         return None
-    return max(0, (expires_at - datetime.utcnow()).days)
+    return max(0, (expires_at - _utc_now()).days)
 
 
 def _detect_plan_type(product_id: str) -> str:
@@ -289,6 +302,57 @@ async def _downgrade_to_free(user_id: str, now: datetime) -> None:
     except Exception as exc:
         logger.warning("Could not downgrade user %s: %s", user_id, exc)
 
+
+# ── Webhook idempotency helpers ──────────────────────────────────────────────
+
+def _webhook_events_col():
+    """Collection to store processed webhook event IDs (TTL auto-cleanup)."""
+    return get_db()["webhook_events"]
+
+
+async def _is_duplicate_event(event_id: str) -> bool:
+    """Check if this webhook event has already been processed."""
+    if not event_id:
+        return False
+    result = await _webhook_events_col().find_one({"_id": event_id})
+    return result is not None
+
+
+async def _mark_event_processed(event_id: str, user_id: str, event_type: str) -> None:
+    """Record that this webhook event has been processed."""
+    if not event_id:
+        return
+    await _webhook_events_col().update_one(
+        {"_id": event_id},
+        {"$set": {
+            "user_id":      user_id,
+            "event_type":   event_type,
+            "processed_at": _utc_now(),
+        }},
+        upsert=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  GET /subscription/plans
+#  Returns plan catalog for the mobile paywall — no authentication required.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/plans")
+async def get_plan_catalog():
+    """
+    Returns the available subscription plans for the paywall screen.
+    No authentication required — this powers the pre-purchase UI.
+
+    Response includes both plans with pricing, trial info, and savings.
+    """
+    return {
+        "success": True,
+        "plans":   list(PLANS.values()),
+        "default": "yearly",
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /subscription/verify
 #  Mobile calls this right after the RC SDK reports a successful purchase.
@@ -333,32 +397,43 @@ async def verify_subscription(
 
     ent        = entitlements[0]
     expires_dt = _ms_to_dt(ent.get("expires_at"))
-    now        = datetime.utcnow()
+    now        = _utc_now()
 
-    # Preserve existing plan_type if we already have a subscription doc
-    existing  = await subscriptions_col().find_one({"user_id": user_id})
-    plan_type = existing.get("plan_type", "monthly") if existing else "monthly"
+    # Detect plan_type from the product_id returned by RC
+    product_id = ent.get("product_id", "") or ent.get("product_identifier", "")
+    if product_id:
+        plan_type = _detect_plan_type(product_id)
+    else:
+        # Fallback: check existing subscription doc, else default to monthly
+        existing  = await subscriptions_col().find_one({"user_id": user_id})
+        plan_type = existing.get("plan_type", "monthly") if existing else "monthly"
 
-    is_trial             = False
-    status               = "active"
+    # Detect trial status from entitlement period type
+    period_type = ent.get("period_type", "")
+    is_trial    = period_type.upper() == "TRIAL" if period_type else False
+    status      = "trialing" if is_trial else "active"
 
     await _upsert_premium(
         user_id              = user_id,
         plan_type            = plan_type,
         status               = status,
-        is_trial             = is_trial,     # webhook will correct if it's a trial
+        is_trial             = is_trial,
         will_renew           = True,
         cancel_at_period_end = False,
         expires_dt           = expires_dt,
         rc_entitlement_id    = ent.get("entitlement_id", RC_ENTITLEMENT_ID),
+        product_id           = product_id,
         now                  = now,
     )
 
-    logger.info("✅ /verify: user %s activated (expires: %s)", user_id, expires_dt)
+    logger.info(
+        "[OK] /verify: user %s activated (plan=%s, trial=%s, expires=%s)",
+        user_id, plan_type, is_trial, expires_dt,
+    )
 
     return {
         "success":        True,
-        "message":  "Subscription verified and activated." if not is_trial else "Trial started.",
+        "message":        "Trial started." if is_trial else "Subscription verified and activated.",
         "plan":           "premium",
         "plan_type":      plan_type,
         "status":         status,
@@ -367,6 +442,61 @@ async def verify_subscription(
         "days_remaining": _days_remaining(expires_dt),
         "will_renew":     True,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  POST /subscription/grant
+#  Admin: force-grant premium to a user without going through RevenueCat.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/grant")
+async def grant_premium(
+    body: GrantRequest,
+    _:    None = Depends(_require_admin),
+):
+    """
+    Admin-only: force-grant premium to a user.
+    Useful for comping influencers, internal testing, support escalations, etc.
+
+    Requires X-Admin-Secret header matching the ADMIN_SECRET env var.
+
+    Body: { "user_id": "<MongoDB _id>", "entitlement_id": "optional override" }
+    """
+    # Validate user exists
+    try:
+        user = await users_col().find_one({"_id": ObjectId(body.user_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid user_id format.")
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    now            = _utc_now()
+    entitlement_id = body.entitlement_id or RC_ENTITLEMENT_ID
+
+    await _upsert_premium(
+        user_id              = body.user_id,
+        plan_type            = "monthly",
+        status               = "active",
+        is_trial             = False,
+        will_renew           = False,          # admin grant — no auto-renew
+        cancel_at_period_end = False,
+        expires_dt           = None,           # no expiry for admin grants
+        rc_entitlement_id    = entitlement_id,
+        product_id           = "admin_grant",
+        now                  = now,
+    )
+
+    logger.info("[OK] /grant: premium granted to user %s", body.user_id)
+
+    return {
+        "success":        True,
+        "message":        f"Premium granted to user {body.user_id}.",
+        "plan":           "premium",
+        "user_id":        body.user_id,
+        "entitlement_id": entitlement_id,
+    }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /subscription/status
@@ -378,20 +508,20 @@ async def subscription_status(current_user: dict = Depends(_require_auth)):
     Returns full subscription state for the authenticated user.
 
     Use this to:
-      • Gate premium features (check plan == "premium")
-      • Show trial banner (check is_trial == true)
-      • Show expiry countdown (use days_remaining)
-      • Drive the "Manage Subscription" screen
+      * Gate premium features (check plan == "premium")
+      * Show trial banner (check is_trial == true)
+      * Show expiry countdown (use days_remaining)
+      * Drive the "Manage Subscription" screen
 
     Key response fields:
-      plan           → "free" | "premium"
-      plan_type      → "monthly" | "yearly" | null
-      status         → "active" | "trialing" | "past_due" | "expired" | "inactive"
-      is_trial       → true during the 7-day trial window
-      days_remaining → days until expiry (null = no expiry / lifetime)
-      will_renew     → false = they cancelled but still have access until expiry
-      cancel_at_period_end → true if user pressed cancel in store
-      plan_info      → full plan object from PLANS dict (price, interval, etc.)
+      plan           -> "free" | "premium"
+      plan_type      -> "monthly" | "yearly" | null
+      status         -> "active" | "trialing" | "past_due" | "expired" | "inactive"
+      is_trial       -> true during the 7-day trial window
+      days_remaining -> days until expiry (null = no expiry / lifetime)
+      will_renew     -> false = they cancelled but still have access until expiry
+      cancel_at_period_end -> true if user pressed cancel in store
+      plan_info      -> full plan object from PLANS dict (price, interval, etc.)
     """
     sub = await subscriptions_col().find_one(
         {"user_id": str(current_user["_id"])},
@@ -426,6 +556,36 @@ async def subscription_status(current_user: dict = Depends(_require_auth)):
         "will_renew":           sub.get("will_renew", False),
         "cancel_at_period_end": sub.get("cancel_at_period_end", False),
         "plan_info":            PLANS.get(plan_type),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  POST /subscription/cancel
+#  Returns platform-specific deep-links for the user to manage/cancel.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/cancel")
+async def cancel_subscription(current_user: dict = Depends(_require_auth)):
+    """
+    Returns the platform-specific deep-links for managing/cancelling
+    the subscription in the App Store or Google Play.
+
+    We don't cancel directly — Apple/Google require the user to do it
+    through their store subscription settings. RevenueCat's webhook will
+    notify us via CANCELLATION -> EXPIRATION events automatically.
+    """
+    return {
+        "success": True,
+        "message": (
+            "To cancel your subscription, visit your device's "
+            "subscription settings."
+        ),
+        "ios_url":     "https://apps.apple.com/account/subscriptions",
+        "android_url": "https://play.google.com/store/account/subscriptions",
+        "note": (
+            "Your access continues until the end of your current "
+            "billing period."
+        ),
     }
 
 
@@ -470,9 +630,14 @@ async def revenuecat_webhook(
     """Handles all RevenueCat subscription lifecycle events automatically."""
 
     # ── 1. Verify shared secret ───────────────────────────────────────────────
-    if RC_WEBHOOK_AUTH_TOKEN and authorization != RC_WEBHOOK_AUTH_TOKEN:
-        logger.warning("❌ Webhook: invalid authorization header")
-        raise HTTPException(status_code=401, detail="Invalid webhook authorization.")
+    if RC_WEBHOOK_AUTH_TOKEN:
+        expected = f"Bearer {RC_WEBHOOK_AUTH_TOKEN}"
+        if authorization != expected:
+            logger.warning("[DENY] Webhook: invalid authorization header")
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid webhook authorization.",
+            )
 
     body  = await request.json()
     event = body.get("event", {})
@@ -483,7 +648,16 @@ async def revenuecat_webhook(
     if not app_user_id:
         return {"success": True}
 
-    now = datetime.utcnow()
+    # ── 1b. Idempotency check ─────────────────────────────────────────────────
+    event_id = event.get("id", "")
+    if event_id and await _is_duplicate_event(event_id):
+        logger.info(
+            "[SKIP] Duplicate webhook event %s for user %s",
+            event_id, app_user_id,
+        )
+        return {"success": True}
+
+    now = _utc_now()
 
     # ── 2. Parse event fields ─────────────────────────────────────────────────
     expiration_dt         = _ms_to_dt(event.get("expiration_at_ms"))
@@ -494,8 +668,8 @@ async def revenuecat_webhook(
     plan_type             = _detect_plan_type(product_id)
 
     logger.info(
-        "📨 RC Webhook | %-22s user=%-24s plan=%-8s trial=%-5s entitlements=%s",
-        etype, app_user_id, plan_type, is_trial, event_entitlement_ids
+        "[RC] %-22s user=%-24s plan=%-8s trial=%-5s entitlements=%s",
+        etype, app_user_id, plan_type, is_trial, event_entitlement_ids,
     )
 
     # ── INITIAL_PURCHASE ─────────────────────────────────────────────────────
@@ -503,7 +677,7 @@ async def revenuecat_webhook(
     # so period_type will be "TRIAL" and is_trial will be True.
     if etype == "INITIAL_PURCHASE":
         if not _event_has_our_entitlement(event_entitlement_ids):
-            logger.info("⏭️  Skipping INITIAL_PURCHASE — not our entitlement")
+            logger.info("[SKIP] INITIAL_PURCHASE -- not our entitlement")
             return {"success": True}
 
         await _upsert_premium(
@@ -517,17 +691,20 @@ async def revenuecat_webhook(
             product_id           = product_id,
             now                  = now,
         )
-        label = "trial started 🆕" if is_trial else "activated ✅"
-        logger.info("✅ INITIAL_PURCHASE: user %s → %s (%s)", app_user_id, label, plan_type)
+        label = "trial started" if is_trial else "activated"
+        logger.info(
+            "[OK] INITIAL_PURCHASE: user %s -> %s (%s)",
+            app_user_id, label, plan_type,
+        )
 
     # ── RENEWAL ──────────────────────────────────────────────────────────────
     # Fires when:
-    #   • Trial converts to paid (period_type: TRIAL → NORMAL, user gets charged)
-    #   • Monthly billing cycle renews
-    #   • Yearly billing cycle renews
+    #   * Trial converts to paid (period_type: TRIAL -> NORMAL, user gets charged)
+    #   * Monthly billing cycle renews
+    #   * Yearly billing cycle renews
     elif etype == "RENEWAL":
         if not _event_has_our_entitlement(event_entitlement_ids):
-            logger.info("⏭️  Skipping RENEWAL — not our entitlement")
+            logger.info("[SKIP] RENEWAL -- not our entitlement")
             return {"success": True}
 
         await _upsert_premium(
@@ -541,7 +718,10 @@ async def revenuecat_webhook(
             product_id           = product_id,
             now                  = now,
         )
-        logger.info("✅ RENEWAL: user %s active (%s, expires: %s)", app_user_id, plan_type, expiration_dt)
+        logger.info(
+            "[OK] RENEWAL: user %s active (%s, expires: %s)",
+            app_user_id, plan_type, expiration_dt,
+        )
 
     # ── UNCANCELLATION ───────────────────────────────────────────────────────
     # User cancelled but then re-enabled auto-renew before the period ended.
@@ -558,10 +738,13 @@ async def revenuecat_webhook(
                 "updated_at":           now,
             }}
         )
-        logger.info("🔄 UNCANCELLATION: user %s re-enabled auto-renew", app_user_id)
+        logger.info(
+            "[OK] UNCANCELLATION: user %s re-enabled auto-renew",
+            app_user_id,
+        )
 
     # ── PRODUCT_CHANGE ───────────────────────────────────────────────────────
-    # User switched between monthly ↔ yearly.
+    # User switched between monthly <-> yearly.
     # RC handles proration with Apple / Google — we just update our record.
     elif etype == "PRODUCT_CHANGE":
         new_product_id = event.get("new_product_id", product_id)
@@ -577,8 +760,8 @@ async def revenuecat_webhook(
             }}
         )
         logger.info(
-            "🔄 PRODUCT_CHANGE: user %s → %s (product: %s)",
-            app_user_id, new_plan_type, new_product_id
+            "[OK] PRODUCT_CHANGE: user %s -> %s (product: %s)",
+            app_user_id, new_plan_type, new_product_id,
         )
 
     # ── CANCELLATION ─────────────────────────────────────────────────────────
@@ -598,25 +781,25 @@ async def revenuecat_webhook(
         )
         label = "trial" if is_trial else "period"
         logger.info(
-            "🚫 CANCELLATION: user %s cancelled during %s — access until %s",
-            app_user_id, label, expiration_dt
+            "[CANCEL] user %s cancelled during %s -- access until %s",
+            app_user_id, label, expiration_dt,
         )
 
     # ── EXPIRATION ───────────────────────────────────────────────────────────
     # Subscription is fully done. Downgrade to free.
     # Fires after:
-    #   • Trial ends + user cancelled during trial
-    #   • Paid period ends after CANCELLATION
-    #   • Billing issue not resolved in RC's grace period
+    #   * Trial ends + user cancelled during trial
+    #   * Paid period ends after CANCELLATION
+    #   * Billing issue not resolved in RC's grace period
     elif etype == "EXPIRATION":
         await _downgrade_to_free(app_user_id, now)
-        logger.info("⬇️  EXPIRATION: user %s → free", app_user_id)
+        logger.info("[DOWNGRADE] EXPIRATION: user %s -> free", app_user_id)
 
     # ── BILLING_ISSUE ────────────────────────────────────────────────────────
     # Payment failed. RC retries automatically for ~2 weeks (configurable).
     # User keeps access during retry period — we just mark status as past_due.
-    # If retry succeeds → RENEWAL fires → back to active.
-    # If RC gives up → EXPIRATION fires → downgrade to free.
+    # If retry succeeds -> RENEWAL fires -> back to active.
+    # If RC gives up   -> EXPIRATION fires -> downgrade to free.
     elif etype == "BILLING_ISSUE":
         await subscriptions_col().update_one(
             {"user_id": app_user_id},
@@ -625,7 +808,10 @@ async def revenuecat_webhook(
                 "updated_at": now,
             }}
         )
-        logger.warning("⚠️  BILLING_ISSUE: user %s — payment failed, RC retrying", app_user_id)
+        logger.warning(
+            "[WARN] BILLING_ISSUE: user %s -- payment failed, RC retrying",
+            app_user_id,
+        )
 
     # ── TRANSFER ─────────────────────────────────────────────────────────────
     # User logged into a different account on a new device and RC transferred
@@ -634,11 +820,16 @@ async def revenuecat_webhook(
     elif etype == "TRANSFER":
         transferred_to = event.get("transferred_to", [])
         logger.info(
-            "📲 TRANSFER: subscription moved from %s → %s",
-            app_user_id, transferred_to
+            "[TRANSFER] subscription moved from %s -> %s",
+            app_user_id, transferred_to,
         )
 
     else:
-        logger.info("ℹ️  Unhandled RC event: %s for user %s", etype, app_user_id)
+        logger.info(
+            "[INFO] Unhandled RC event: %s for user %s", etype, app_user_id,
+        )
+
+    # ── 3. Mark event as processed (idempotency) ─────────────────────────────
+    await _mark_event_processed(event_id, app_user_id, etype)
 
     return {"success": True}

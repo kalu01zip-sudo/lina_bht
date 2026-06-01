@@ -59,11 +59,11 @@ def _llm_label() -> str:
     model     = os.getenv("LM_STUDIO_MODEL", "local-model")
 
     if mock:
-        return "⚠️  MOCK (no LLM calls)"
+        return "[MOCK] (no LLM calls)"
     if use_local:
-        vision_tag = " + vision ✅" if lm_vision else " (text only, scans mocked)"
-        return f"🏠 LM Studio — {model}{vision_tag}"
-    return "☁️  Anthropic Claude"
+        vision_tag = " + vision" if lm_vision else " (text only, scans mocked)"
+        return f"[LOCAL] LM Studio - {model}{vision_tag}"
+    return "[CLOUD] Anthropic Claude"
 
 
 @asynccontextmanager
@@ -74,12 +74,12 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.lia_scheduler import start_scheduler, stop_scheduler
         start_scheduler()
-        print("🤖 Lia scheduler started.")
+        print("[OK] Lia scheduler started.")
     except Exception as exc:
-        print(f"⚠️  Lia scheduler failed to start (non-fatal): {exc}")
+        print(f"[WARN] Lia scheduler failed to start (non-fatal): {exc}")
         stop_scheduler = None
 
-    print(f"🚀 SkinSense API ready.  LLM = {_llm_label()}")
+    print(f"[READY] SkinSense API ready.  LLM = {_llm_label()}")
     yield
 
     # ── Stop Lia scheduler ────────────────────────────────────────────────
@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    print("🛑 Server shutdown.")
+    print("[STOP] Server shutdown.")
 
 
 app = FastAPI(

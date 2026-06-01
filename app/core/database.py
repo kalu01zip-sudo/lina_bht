@@ -119,6 +119,13 @@ async def create_indexes():
         # Index on plan_type for any future multi-tier lookups.
         await db.plan_config.create_index("plan_type", unique=True, sparse=True)
 
+        # ── webhook_events (subscription webhook idempotency) ────────────────────────
+        # Auto-delete processed event records after 7 days to keep collection small.
+        await db.webhook_events.create_index(
+            "processed_at",
+            expireAfterSeconds=7 * 24 * 3600,   # 7 days TTL
+        )
+
         print("[OK] MongoDB indexes created.")
     except Exception as e:
         print(f"[WARN] MongoDB unavailable for index creation (non-fatal): {str(e)[:100]}")

@@ -91,9 +91,9 @@ async def upload_face_images(
     food_data = smart_rank(raw_foods, nutrition_ids, ai_data)
     recipe_data = smart_rank(raw_recipes, nutrition_ids, ai_data)
 
-    # print("🔍 NUTRITION IDS:", nutrition_ids)
-    print("🔍 RECIPES RESULT:", recipe_data)
-    print("🔍 RECIPES COUNT:", len(recipe_data))
+    # print("[SCAN] NUTRITION IDS:", nutrition_ids)
+    print("[SCAN] RECIPES RESULT:", recipe_data)
+    print("[SCAN] RECIPES COUNT:", len(recipe_data))
 
     # print("AI CONDITIONS:", ai_data["detected_condition"])
     # print("MAPPED NUTRITION IDS:", nutrition_ids)

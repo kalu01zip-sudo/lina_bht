@@ -122,7 +122,7 @@ async def generate_product_routine(
     except Exception as e:
 
         print(
-            "❌ PRODUCT ROUTINE ERROR:",
+            "[ERROR] PRODUCT ROUTINE ERROR:",
             e
         )
 
@@ -194,7 +194,7 @@ async def create_manual_routine(
     except Exception as e:
 
         print(
-            "❌ MANUAL ROUTINE ERROR:",
+            "[ERROR] MANUAL ROUTINE ERROR:",
             e
         )
 
@@ -249,7 +249,7 @@ async def generate_manual_ai_routine(
     except Exception as e:
 
         print(
-            "❌ MANUAL AI ROUTINE ERROR:",
+            "[ERROR] MANUAL AI ROUTINE ERROR:",
             e
         )
 

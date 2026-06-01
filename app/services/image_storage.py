@@ -23,5 +23,5 @@ async def upload_scan_image(file_bytes: bytes, user_id: str):
         return url
 
     except Exception as e:
-        print("❌ IMAGE UPLOAD ERROR:", e)
+        print("[ERROR] IMAGE UPLOAD ERROR:", e)
         return None

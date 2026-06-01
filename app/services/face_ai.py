@@ -189,7 +189,7 @@ cheeks, nose, forehead, chin, under_eye
         return json.loads(clean_json)
 
     except Exception as e:
-        print("❌ CLAUDE RAW RESPONSE:", response)
+        print("[ERROR] CLAUDE RAW RESPONSE:", response)
         raise Exception(f"Claude parsing failed: {str(e)}")
 
 async def verify_same_person(images: list[bytes]) -> dict:

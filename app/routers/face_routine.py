@@ -73,5 +73,5 @@ async def generate_face_routine(
         raise
 
     except Exception as e:
-        print("❌ ROUTINE ERROR:", e)
+        print("[ERROR] ROUTINE ERROR:", e)
         raise HTTPException(status_code=500, detail="Failed to generate routine")
