@@ -42,4 +42,3 @@ supabase>=0.0.1
 
 #-------Lia AI Coach-------
 apscheduler>=3.10.0
-firebase-admin>=6.0.0

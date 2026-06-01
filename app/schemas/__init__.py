@@ -15,17 +15,19 @@ class SignUpRequest(BaseModel):
     email:     EmailStr
     password:  str
     full_name: Optional[str] = None
+    onesignal_id: Optional[str] = None
     _val_pw = field_validator("password")(_strong_password)
 
     model_config = {"json_schema_extra": {"example": {
-        "email": "user@example.com", "password": "Secure123", "full_name": "Jane Doe"
+        "email": "user@example.com", "password": "Secure123", "full_name": "Jane Doe", "onesignal_id": "onesignal-sub-id-123"
     }}}
 
 class SignInRequest(BaseModel):
     email:    EmailStr
     password: str
+    onesignal_id: Optional[str] = None
     model_config = {"json_schema_extra": {"example": {
-        "email": "user@example.com", "password": "Secure123"
+        "email": "user@example.com", "password": "Secure123", "onesignal_id": "onesignal-sub-id-123"
     }}}
 
 class VerifyEmailRequest(BaseModel):
@@ -56,7 +58,8 @@ class ResendOTPRequest(BaseModel):
 # Google OAuth
 class GoogleAuthRequest(BaseModel):
     id_token: str   # Google ID token from mobile app (Firebase / Google Sign-In SDK)
-    model_config = {"json_schema_extra": {"example": {"id_token": "eyJhbGciOiJSUzI1NiIs..."}}}
+    onesignal_id: Optional[str] = None
+    model_config = {"json_schema_extra": {"example": {"id_token": "eyJhbGciOiJSUzI1NiIs...", "onesignal_id": "onesignal-sub-id-123"}}}
 
 # ── Profile ───────────────────────────────────────────────────────────────
 
@@ -140,6 +143,7 @@ class MessageResponse(BaseModel):
 class AppleAuthRequest(BaseModel):
     identity_token: str        # JWT from Apple
     full_name: Optional[str] = None   # only sent on FIRST login
+    onesignal_id: Optional[str] = None
 
 
 # ── RevenueCat Subscription ─────────────────────────────────────────────

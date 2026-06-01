@@ -1,6 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from typing import List
-from app.services.scalp_ai import analyze_scalp_with_claude
+from app.services.scalp_ai import analyze_scalp_with_claude, validate_scalp_or_hair_image
 from app.services.scalp_history import (
     save_scalp_scan_result, 
     get_scalp_scan_history, 
@@ -32,6 +32,22 @@ async def upload_scalp_image(
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(400, "Empty file")
+
+    # Cheap preflight: reject unrelated images before the full analysis pipeline.
+    try:
+        validation = await validate_scalp_or_hair_image(file_bytes)
+    except Exception as e:
+        raise HTTPException(500, f"Scalp image validation failed: {str(e)}")
+
+    if not validation.get("scalp_or_hair_detected"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "NO_SCALP_OR_HAIR",
+                "message": "Please upload a clear scalp or hair image.",
+                "reason": validation.get("reason"),
+            }
+        )
 
     # Call AI
     try:

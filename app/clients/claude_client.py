@@ -38,7 +38,7 @@ _LM_BASE    = _LM_BASE if _LM_BASE.endswith("/v1") else _LM_BASE + "/v1"
 _LM_MODEL   = os.environ.get("LM_STUDIO_MODEL",    "local-model")
 
 _ANTH_KEY   = os.environ.get("ANTHROPIC_API_KEY", "")
-_ANTH_MODEL = "claude-sonnet-4-6"
+_ANTH_MODEL = "claude-haiku-4-5"
 _ANTH_URL   = "https://api.anthropic.com/v1/messages"
 _ANTH_VER   = "2023-06-01"
 

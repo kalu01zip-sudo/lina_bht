@@ -7,16 +7,16 @@ from app.services.product_matcher import get_all_categories
 
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-categories = get_all_categories()
-categories_str = ", ".join(categories)
-
 def extract_json(text: str):
     match = re.search(r"\{.*\}", text, re.DOTALL)
     return match.group() if match else None
 
 
 async def generate_face_routine_ai(scan_data: dict, profile: dict):
-    system_prompt = """
+    categories = get_all_categories()
+    categories_str = ", ".join(categories)
+
+    system_prompt = f"""
 You are a dermatology AI.
 
 STRICT RULES:
@@ -127,7 +127,7 @@ IMPORTANT RULES:
 """
 
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5",
         max_tokens=800,
         temperature=0,
         system=system_prompt,

@@ -25,12 +25,17 @@ def match_product(category: str, focus: str):
     return res.data[0] if res.data else None
 
 def get_all_categories():
-    res = supabase.table("products") \
-        .select("category") \
-        .execute()
+    try:
+        res = supabase.table("products") \
+            .select("category") \
+            .execute()
 
-    categories = list(set([p["category"] for p in res.data]))
-    return categories
+        categories = list(set([p["category"] for p in res.data]))
+        return categories
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Failed to fetch product categories from Supabase (network/db offline): %s", exc)
+        return ["cleanser", "serum", "moisturizer", "sunscreen", "mask"]
 
 def normalize_category(cat: str):
     mapping = {

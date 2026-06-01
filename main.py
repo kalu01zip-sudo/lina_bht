@@ -48,6 +48,7 @@ from app.routers import (
     scalp_scan,
     scalp_routine
 )
+from app.routers import homepage
 from app.routers.articles import router as articles_router, admin_router as admin_articles_router
 
 
@@ -106,6 +107,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(homepage.router)
 app.include_router(onboarding.router)
 app.include_router(profile.router)
 app.include_router(support.router)

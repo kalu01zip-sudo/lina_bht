@@ -60,7 +60,7 @@ async def _get_all_active_users() -> list[dict]:
             "pregnancy_start_month": 1,
             "pregnancy_month_updated_at": 1,
             "allergies": 1,
-            "fcm_tokens": 1,
+            "onesignal_subscriptions": 1,
         },
     )
     users = await cursor.to_list(length=5000)
@@ -252,6 +252,23 @@ async def run_periodic_checks():
     logger.info("[Lia Scheduler] Periodic checks complete.")
 
 
+async def run_daily_routine_reset():
+    """Midnight - reset daily routine completion state."""
+    logger.info("[Lia Scheduler] Resetting daily routine completion state...")
+
+    def _reset_daily_routines():
+        return supabase.table("saved_routines") \
+            .update({
+                "is_completed": False,
+                "completed_at": None,
+            }) \
+            .in_("time", ["morning", "night"]) \
+            .execute()
+
+    await asyncio.to_thread(_reset_daily_routines)
+    logger.info("[Lia Scheduler] Daily routine reset complete.")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  SCHEDULER LIFECYCLE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -298,10 +315,19 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # Daily routine completion reset - midnight
+    _scheduler.add_job(
+        run_daily_routine_reset,
+        CronTrigger(hour=0, minute=0),
+        id="routine_daily_reset",
+        name="Daily Routine Reset (midnight)",
+        replace_existing=True,
+    )
+
     _scheduler.start()
     logger.info(
-        "[Lia Scheduler] Started with 4 jobs: "
-        "morning(8AM), evening(9PM), weekly(Sun 10AM), periodic(6h)"
+        "[Lia Scheduler] Started with 5 jobs: "
+        "morning(8AM), evening(9PM), weekly(Sun 10AM), periodic(6h), daily-reset(midnight)"
     )
 
 

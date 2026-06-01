@@ -23,7 +23,7 @@ from app.services.lia_notification_service import (
     save_notification,
     has_recent_notification,
 )
-from app.services.firebase_push import send_push_to_user_tokens
+from app.services.onesignal import send_push_to_user_subscriptions
 
 logger = logging.getLogger(__name__)
 
@@ -118,19 +118,19 @@ def _deliver_notification(
     )
 
     # Send push notification
-    fcm_tokens = user_doc.get("fcm_tokens", [])
-    if fcm_tokens:
-        success, failed = send_push_to_user_tokens(
-            fcm_tokens=fcm_tokens,
+    sub_ids = user_doc.get("onesignal_subscriptions", [])
+    if sub_ids:
+        success, failed = send_push_to_user_subscriptions(
+            subscription_ids=sub_ids,
             title=title,
             body=message,
             data={"trigger": trigger, **(data or {})},
         )
 
-        # Clean up invalid tokens
+        # Clean up invalid subscriptions
         if failed:
             remaining = [
-                t for t in fcm_tokens if t not in failed
+                t for t in sub_ids if t not in failed
             ]
             from app.core.database import users_col
             from bson import ObjectId
@@ -140,15 +140,15 @@ def _deliver_notification(
                 loop.create_task(
                     users_col().update_one(
                         {"_id": ObjectId(user_id)},
-                        {"$set": {"fcm_tokens": remaining}},
+                        {"$set": {"onesignal_subscriptions": remaining}},
                     )
                 )
             except Exception:
                 pass
 
         logger.info(
-            "[Lia] Push sent to %s: %d/%d devices",
-            user_id[:8], success, len(fcm_tokens),
+            "[Lia] Push sent to %s: %d/%d devices via OneSignal",
+            user_id[:8], success, len(sub_ids),
         )
 
 

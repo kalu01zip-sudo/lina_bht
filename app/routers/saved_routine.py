@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException
 from pydantic import (
     BaseModel,
@@ -23,6 +25,64 @@ router = APIRouter(
     prefix="/routine",
     tags=["Routine"]
 )
+
+
+def _parse_completed_at(value: str | None) -> datetime | None:
+
+    if not value:
+
+        return None
+
+    try:
+
+        return datetime.fromisoformat(
+            value.replace("Z", "+00:00")
+        ).astimezone(
+            timezone.utc
+        )
+
+    except ValueError:
+
+        return None
+
+
+def _reset_stale_weekly_steps(rows: list[dict]) -> list[dict]:
+
+    now = datetime.now(
+        timezone.utc
+    )
+    stale_ids = []
+
+    for row in rows:
+
+        if row.get("time") != "weekly" or not row.get("is_completed"):
+
+            continue
+
+        completed_at = _parse_completed_at(
+            row.get("completed_at")
+        )
+
+        if completed_at and (now - completed_at).days >= 7:
+
+            stale_ids.append(
+                row["id"]
+            )
+            row["is_completed"] = False
+            row["completed_at"] = None
+
+    if stale_ids:
+
+        supabase.table(
+            "saved_routines"
+        ).update({
+            "is_completed": False,
+            "completed_at": None
+        }).in_(
+            "id", stale_ids
+        ).execute()
+
+    return rows
 
 
 # =========================
@@ -102,7 +162,9 @@ async def save_routine(
                 ),
                 "why": draft.get(
                     "why"
-                )
+                ),
+                "is_completed": False,
+                "completed_at": None
             })
 
         result = supabase.table(
@@ -129,6 +191,76 @@ async def save_routine(
         raise HTTPException(
             status_code=500,
             detail="Failed to save routine"
+        )
+
+
+# =========================
+# MARK ROUTINE STEP COMPLETE
+# =========================
+
+@router.patch("/step/{step_id}/complete")
+async def mark_step_complete(
+    step_id: str,
+    current_user: CurrentUser
+):
+
+    try:
+
+        user_id = str(
+            current_user["_id"]
+        )
+
+        existing_step = supabase.table(
+            "saved_routines"
+        ).select(
+            "id, user_id, time, is_completed"
+        ).eq(
+            "id", step_id
+        ).eq(
+            "user_id", user_id
+        ).execute()
+
+        if not existing_step.data:
+
+            raise HTTPException(
+                status_code=404,
+                detail="Routine step not found or does not belong to this user"
+            )
+
+        completed_at = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        result = supabase.table(
+            "saved_routines"
+        ).update({
+            "is_completed": True,
+            "completed_at": completed_at
+        }).eq(
+            "id", step_id
+        ).eq(
+            "user_id", user_id
+        ).execute()
+
+        return {
+            "success": True,
+            "step_id": step_id,
+            "is_completed": True,
+            "completed_at": completed_at,
+            "data": result.data[0] if result.data else None
+        }
+
+    except HTTPException:
+
+        raise
+
+    except Exception as e:
+
+        print("MARK ROUTINE STEP COMPLETE ERROR:", e)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to mark routine step complete"
         )
 
 
@@ -220,10 +352,14 @@ async def get_all_saved_routines(
             desc=False
         ).execute()
 
+        data = _reset_stale_weekly_steps(
+            result.data or []
+        )
+
         return {
             "success": True,
-            "count": len(result.data),
-            "data": result.data
+            "count": len(data),
+            "data": data
         }
 
     except Exception as e:

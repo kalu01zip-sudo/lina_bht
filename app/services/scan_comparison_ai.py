@@ -30,7 +30,7 @@ async def generate_comparison_message(scan_1_analysis: dict, scan_2_analysis: di
     try:
         # Using a faster model if possible, or sticking to sonnet for quality
         response = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5",
             max_tokens=100,
             temperature=0.7,
             system=system_prompt,

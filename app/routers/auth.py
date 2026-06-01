@@ -161,43 +161,43 @@ CurrentUser = Annotated[dict, Depends(_get_current_user)]
 
 
 # ─────────────────────────────────────────────────
-#  FCM TOKEN (Push Notifications)
+#  ONESIGNAL SUBSCRIPTION (Push Notifications)
 # ─────────────────────────────────────────────────
 
-class FCMTokenRequest(BaseModel):
-    fcm_token: str
+class OneSignalSubscriptionRequest(BaseModel):
+    subscription_id: str
 
-@router.post("/fcm-token")
-async def save_fcm_token(body: FCMTokenRequest, current_user: CurrentUser):
+@router.post("/onesignal-subscription")
+async def save_onesignal_subscription(body: OneSignalSubscriptionRequest, current_user: CurrentUser):
     """
-    Save or update FCM token for push notifications.
-    Called by the mobile app after login / on token refresh.
+    Save or update OneSignal subscription ID for push notifications.
+    Called by the mobile app after login / on subscription change.
     Supports multiple devices per user (stores as array).
     """
-    token = body.fcm_token.strip()
-    if not token:
-        raise HTTPException(status_code=400, detail="FCM token cannot be empty.")
+    sub_id = body.subscription_id.strip()
+    if not sub_id:
+        raise HTTPException(status_code=400, detail="Subscription ID cannot be empty.")
 
-    # Add token to array (avoid duplicates)
+    # Add subscription ID to array (avoid duplicates)
     await users_col().update_one(
         {"_id": current_user["_id"]},
-        {"$addToSet": {"fcm_tokens": token}},
+        {"$addToSet": {"onesignal_subscriptions": sub_id}},
     )
 
-    return {"success": True, "message": "FCM token saved."}
+    return {"success": True, "message": "OneSignal subscription saved."}
 
 
-@router.delete("/fcm-token")
-async def remove_fcm_token(body: FCMTokenRequest, current_user: CurrentUser):
+@router.delete("/onesignal-subscription")
+async def remove_onesignal_subscription(body: OneSignalSubscriptionRequest, current_user: CurrentUser):
     """
-    Remove an FCM token (e.g. on logout from a specific device).
+    Remove a OneSignal subscription ID (e.g. on logout from a specific device).
     """
     await users_col().update_one(
         {"_id": current_user["_id"]},
-        {"$pull": {"fcm_tokens": body.fcm_token}},
+        {"$pull": {"onesignal_subscriptions": body.subscription_id}},
     )
 
-    return {"success": True, "message": "FCM token removed."}
+    return {"success": True, "message": "OneSignal subscription removed."}
 
 
 # ─────────────────────────────────────────────────
@@ -230,6 +230,8 @@ async def signup(body: SignUpRequest):
         "hair_concerns":        [],
         "allergies":            [],
         "budget":               None,
+        # ── Push Notifications ─────────────────────────────────────
+        "onesignal_subscriptions": [body.onesignal_id.strip()] if body.onesignal_id and body.onesignal_id.strip() else [],
         # ──────────────────────────────────────────────────────────
         "created_at":           datetime.utcnow(),
         "updated_at":           datetime.utcnow(),
@@ -337,10 +339,18 @@ async def signin(body: SignInRequest):
 
     tok = _tokens(user)
     await _save_refresh_token(str(user["_id"]), tok["refresh_token"])
+    
+    update_data = {"last_login_at": datetime.utcnow()}
     await users_col().update_one(
         {"_id": user["_id"]},
-        {"$set": {"last_login_at": datetime.utcnow()}}
+        {"$set": update_data}
     )
+    
+    if body.onesignal_id and body.onesignal_id.strip():
+        await users_col().update_one(
+            {"_id": user["_id"]},
+            {"$addToSet": {"onesignal_subscriptions": body.onesignal_id.strip()}}
+        )
 
     return {
         "success": True,
@@ -413,6 +423,13 @@ async def google_signin(body: GoogleAuthRequest):
         if not user.get("avatar_url") and avatar_url:
             update["avatar_url"] = avatar_url
         await users_col().update_one({"_id": user["_id"]}, {"$set": update})
+        
+        if body.onesignal_id and body.onesignal_id.strip():
+            await users_col().update_one(
+                {"_id": user["_id"]},
+                {"$addToSet": {"onesignal_subscriptions": body.onesignal_id.strip()}}
+            )
+            
         user = await users_col().find_one({"_id": user["_id"]})
 
     else:
@@ -433,6 +450,7 @@ async def google_signin(body: GoogleAuthRequest):
             "skin_concerns":   [],
             "hair_concerns":   [],
             "allergies":       [],
+            "onesignal_subscriptions": [body.onesignal_id.strip()] if body.onesignal_id and body.onesignal_id.strip() else [],
             "created_at":      datetime.utcnow(),
             "updated_at":      datetime.utcnow(),
             "last_login_at":   datetime.utcnow(),
@@ -535,6 +553,13 @@ async def apple_signin(body: AppleAuthRequest):
             update["full_name"] = body.full_name.strip()
 
         await users_col().update_one({"_id": user["_id"]}, {"$set": update})
+        
+        if body.onesignal_id and body.onesignal_id.strip():
+            await users_col().update_one(
+                {"_id": user["_id"]},
+                {"$addToSet": {"onesignal_subscriptions": body.onesignal_id.strip()}}
+            )
+            
         user = await users_col().find_one({"_id": user["_id"]})
 
     else:
@@ -565,6 +590,8 @@ async def apple_signin(body: AppleAuthRequest):
             "hair_concerns":        [],
             "allergies":            [],
             "budget":               None,
+            # ── Push Notifications ──────────────────────────────────
+            "onesignal_subscriptions": [body.onesignal_id.strip()] if body.onesignal_id and body.onesignal_id.strip() else [],
             # ──────────────────────────────────────────────────────
             "created_at":           datetime.utcnow(),
             "updated_at":           datetime.utcnow(),

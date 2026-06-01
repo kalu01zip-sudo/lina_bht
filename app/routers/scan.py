@@ -44,13 +44,29 @@ async def upload_face_images(
             })
             continue
 
-        # MediaPipe check removed/bypassed so no images are dropped
+        validation_status = await asyncio.to_thread(validate_image, file_bytes)
+        if validation_status != "ok":
+            errors.append({
+                "image": i + 1,
+                "filename": file.filename,
+                "error": validation_status
+            })
+            continue
+
         valid_count += 1
         valid_images.append(file_bytes)
         results.append(file.filename)
 
     if valid_count != 5:
-        raise HTTPException(400, "5 valid images are required")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_FACE_IMAGES",
+                "message": "Please upload clear face images from different angles. ",
+                "valid_count": valid_count,
+                "errors": errors
+            }
+        )
 
     # ── Identity Check ────────────────────────────────────────────────────
     try:

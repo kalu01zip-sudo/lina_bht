@@ -24,28 +24,25 @@ async def analyze_face_with_claude(images: list[bytes]):
 
     optimised_images = []
     for img in images:
-        opt_bytes, _ = optimise_image(img, "image/jpeg", max_px=720)
+        opt_bytes, _ = optimise_image(img, "image/jpeg", max_px=640)
         optimised_images.append(opt_bytes)
 
     encoded_images = [base64.b64encode(img).decode("utf-8") for img in optimised_images]
 
     system_prompt = """
-You are an advanced dermatology AI system.
+You are a highly critical, precise clinical dermatology AI system. Act as an expert board-certified dermatologist.
 
-STRICT RULES:
-- Return ONLY valid JSON
-- Do NOT include explanation, markdown, or extra text
-- Follow the schema exactly
-- All scores must be integers (0-100)
-- Use ONLY allowed names where specified
-- If unsure, estimate based on visible evidence
-
-IMPORTANT:
-- checked_area names MUST be selected ONLY from the provided list
-- Return ONLY top 5 highest scoring checked_area items
-- visible_area must include ONLY ONE condition (highest visible impact)
-- detected_condition must include exactly 3 items
-- note must be 10-12 words only
+STRICT CLINICAL RULES:
+- Return ONLY valid JSON, no markdown code blocks, extra text, or explanations.
+- Follow the schema exactly. All scores must be integers (0-100).
+- Be highly critical, objective, and realistic. Do not be overly generous, polite, or optimistic. Evaluate the skin exactly as a doctor would.
+- Under checked_area, visible_area, and hydration, a score of 100 represents perfect skin health (e.g. zero acne, zero redness, perfect hydration, perfect texture). Deduct points aggressively for any blemishes, wrinkles, redness, pores, or unevenness.
+- If a condition is visible, its corresponding health/quality score must be significantly lower (e.g. 50-74 for mild/moderate issues, and <50 for severe issues).
+- Ensure the overall_score is mathematically consistent with the sub-scores (e.g. if any detected condition has "Severe" severity, or if any checked area is <50, overall_score must be <60. Mild issues = 80-89, moderate = 60-79).
+- checked_area: Return exactly 5 items. Rather than returning only the highest-scoring (healthiest) ones, return a balanced diagnostic overview: the 3 most critical/lowest-scoring (problematic) areas, and the 2 highest-scoring (healthiest) areas.
+- visible_area: Must include only the single condition with the highest visible impact.
+- detected_condition: Must include exactly 3 conditions from the allowed list.
+- note: A clinical summary or tip of exactly 10-12 words.
 """
 
     user_prompt = """
@@ -113,17 +110,16 @@ Return ONLY JSON in this exact format:
 IMPORTANT RULES:
 
 1. checked_area names MUST be selected ONLY from this list:
-
 hydration, sebum, redness, texture, evenness, pore_size, acne, blackheads, whiteheads, pigmentation, hyperpigmentation, dark_spots, sun_spots, freckles, melasma, dark_circles, eye_bags, fine_lines, wrinkles, crow_feet, elasticity, firmness, sagging, skin_tone, undertone, tone_uniformity, brightness, dullness, radiance, glow, sensitivity, inflammation, irritation, barrier_health, dryness, oil_balance, combination_zones, t_zone_oiliness, cheek_dryness, uv_damage, sun_damage, photoaging, collagen_level, skin_age, biological_age, oxidative_stress, pollution_damage, dehydration_risk, acne_risk, sensitivity_risk, aging_score, overall_skin_health, skin_recovery_rate, wound_healing, microbiome_balance
 
 2. prognosis_timeline name and score means in 7 and 14 days, which checked_area will improve or worsen, and by how much (score change). Return only 2 items per timeline, selected from the checked_area list.
 
-3. Return ONLY top 5 highest scoring checked_area
+3. Return exactly 5 items under checked_area: the 3 lowest-scoring (most problematic) areas, and the 2 highest-scoring (healthiest) areas. All scores must be health/quality metrics (100 = perfect health, 0 = severe condition).
 
 4. visible_area condition must be ONE of:
 acne, pimple, redness, irritation, pigmentation, dullness
 
-5. visible_area must include ONLY the most dominant condition
+5. visible_area must include ONLY the most dominant condition. visible_area score represents the health of that specific condition/area (100 = completely clear, 0 = severe).
 
 6. areas must be selected from:
 cheeks, nose, forehead, chin, under_eye
@@ -134,11 +130,11 @@ cheeks, nose, forehead, chin, under_eye
 
 9. prognosis_timeline scores represent expected change in that area (positive means improvement, negative means worsening), Show the difference in score, not the final score.
 
-10. Hydration target is the amoount of water intake (in ml) recommended to reach optimal skin hydration based on the analysis.
+10. Hydration target is the amount of water intake (in ml) recommended to reach optimal skin hydration based on the analysis.
 
 11. Detected conditions MUST be chosen ONLY from this list: acne, blackheads, whiteheads, pores, oiliness, dryness, dehydration, redness, irritation, sensitivity, pigmentation, dark_spots, uneven_tone, dullness, dark_circles, eye_bags, fine_lines, wrinkles, loss_of_elasticity, sun_damage. Return exactly 3 items using exact names only.
 
-12. OVERALL SCORE CALCULATION: Do not output a default or static number. Start at 100 and dynamically deduct points based on the severity of the detected conditions, hydration level, and checked areas. A completely clear face is 95+, mild issues 80-90, moderate 60-79, severe <60. Be highly dynamic.
+12. OVERALL SCORE CALCULATION: Do not output a default or static number. Start at 100 and dynamically deduct points based on the severity of the detected conditions, hydration level, and checked areas. A completely clear face is 95+, mild issues 80-90, moderate 60-79, severe <60. Be highly dynamic. If any detected condition has "Severe" severity, or if any checked area is <50, overall_score must be <60.
 """
 
     # ✅ BUILD CONTENT
@@ -161,7 +157,7 @@ cheeks, nose, forehead, chin, under_eye
 
     # ✅ CALL CLAUDE
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5",
         max_tokens=800,
         temperature=0.4,
         system=system_prompt,
@@ -231,7 +227,7 @@ Return ONLY a JSON object in this exact format:
 
     try:
         response = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5",
             max_tokens=100,
             temperature=0.4,
             system=system_prompt,

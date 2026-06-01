@@ -1218,6 +1218,7 @@ async def send_message_sync(
 )
 async def get_history(
     limit:   int = Query(default=50, ge=1, le=200),
+    offset:  int = Query(default=0, ge=0),
     user_id: str = Depends(_get_current_user_id),
 ):
     db = get_db()
@@ -1225,6 +1226,7 @@ async def get_history(
         db.chat_messages
         .find({"user_id": user_id})
         .sort("created_at", -1)
+        .skip(offset)
         .limit(limit)
     )
     docs = await cursor.to_list(length=limit)
