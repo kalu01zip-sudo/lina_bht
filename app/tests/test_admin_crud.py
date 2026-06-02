@@ -18,7 +18,6 @@ def run_tests():
 
     # 1. NUTRITION CRUD TEST
     print("\n--- Testing NUTRITION CRUD ---")
-    nut_id = f"test_nut_{uuid.uuid4().hex[:6]}"
     
     # POST
     dummy_image = get_dummy_image()
@@ -26,17 +25,15 @@ def run_tests():
     post_res = client.post(
         "/admin/nutrition",
         data={
-            "id": nut_id,
             "name": "Test Nutrition",
             "main_ingredient": "Test Ingredient",
             "detected_condition": "acne,dryness",
-            "how_it_improves": "Great for testing",
-            "links": "http://example.com/test",
-            "priority": 10
+            "how_it_improves": "Great for testing"
         },
         files={"file": ("test.png", dummy_image, "image/png")}
     )
     assert post_res.status_code == 200, f"Nutrition creation failed: {post_res.text}"
+    nut_id = post_res.json()["id"]
     print("[PASS] POST /admin/nutrition")
 
     # GET List
@@ -60,15 +57,13 @@ def run_tests():
         f"/admin/nutrition/{nut_id}",
         data={
             "name": "Updated Nutrition Name",
-            "how_it_improves": "Even better benefit",
-            "priority": 25
+            "how_it_improves": "Even better benefit"
         },
         files={"file": ("test_upd.png", dummy_image2, "image/png")}
     )
     assert put_res.status_code == 200, f"Nutrition update failed: {put_res.text}"
     updated_item = put_res.json()["data"]
     assert updated_item["name"] == "Updated Nutrition Name"
-    assert updated_item["priority"] == 25
     print("[PASS] PUT /admin/nutrition/{id}")
 
     # DELETE

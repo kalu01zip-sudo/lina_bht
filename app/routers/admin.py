@@ -1,5 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from typing import Optional, List
+import uuid
+from bson import ObjectId
 from app.core.s3_client import upload_file_to_s3
 from app.core.mongo_client import nutritions_collection, foods_collection, recipes_collection
 
@@ -12,6 +14,15 @@ router = APIRouter(prefix="/admin", tags=["Admin Upload"])
 
 def normalize_id(raw_id: str) -> str:
     return raw_id.strip().lower().replace(" ", "_")
+
+
+def get_nutrition_filter(id_str: str) -> dict:
+    normalized = normalize_id(id_str)
+    try:
+        oid = ObjectId(id_str)
+        return {"$or": [{"id": normalized}, {"_id": oid}]}
+    except Exception:
+        return {"id": normalized}
 
 
 def clean_list(val: str) -> List[str]:
@@ -48,26 +59,23 @@ async def upload_image(file: UploadFile, file_path: str) -> str:
 @router.post("/nutrition")
 async def upload_nutrition(
     file: UploadFile = File(...),
-    id: str = Form(...),
     name: str = Form(...),
     main_ingredient: str = Form(...),
     detected_condition: str = Form(...),
-    how_it_improves: str = Form(...),
-    links: str = Form(""),
-    priority: int = Form(1)
+    how_it_improves: str = Form(...)
 ):
     try:
         if not file.content_type.startswith("image/"):
             raise HTTPException(400, "Only image allowed")
 
-        id = normalize_id(id)
-        cond_list = clean_conditions(detected_condition)
-        link_list = clean_list(links)
+        base_id = normalize_id(name)
+        id = base_id
+        while nutritions_collection.find_one({"id": id}):
+            id = f"{base_id}_{uuid.uuid4().hex[:6]}"
 
-        # check duplicate
-        existing = nutritions_collection.find_one({"id": id})
-        if existing:
-            raise HTTPException(400, "ID already exists")
+        cond_list = clean_conditions(detected_condition)
+        link_list = []
+        priority = 1
 
         file_path = f"nutrition/{id}.png"
         public_url = await upload_image(file, file_path)
@@ -75,18 +83,13 @@ async def upload_nutrition(
         nutritions_collection.insert_one({
             "id": id,
             "name": name,
-            "main_ingredient": main_ingredient,
-            "detected_condition": cond_list,
-            "how_it_improves": how_it_improves,
-            "links": link_list,
-            "icon_url": public_url,
-            "priority": priority,
-            # Backwards compatibility
-            "benefit": how_it_improves,
-            "tags": cond_list
+            "main ingredient": main_ingredient,
+            "detected conditions": cond_list,
+            "how to improves": how_it_improves,
+            "image url": public_url
         })
 
-        return {"message": "Nutrition uploaded", "url": public_url}
+        return {"message": "Nutrition uploaded", "id": id, "url": public_url}
 
     except HTTPException:
         raise
@@ -216,7 +219,7 @@ async def list_nutrition():
 
 @router.get("/nutrition/{id}")
 async def get_nutrition(id: str):
-    doc = nutritions_collection.find_one({"id": id})
+    doc = nutritions_collection.find_one(get_nutrition_filter(id))
     if not doc:
         raise HTTPException(404, "Nutrition not found")
     doc["_id"] = str(doc["_id"])
@@ -234,48 +237,45 @@ async def update_nutrition(
     links: Optional[str] = Form(None),
     priority: Optional[int] = Form(None)
 ):
-    existing = nutritions_collection.find_one({"id": id})
+    query_filter = get_nutrition_filter(id)
+    existing = nutritions_collection.find_one(query_filter)
     if not existing:
         raise HTTPException(404, "Nutrition not found")
         
+    actual_id = existing["id"]
     updates = {}
     if name is not None:
         updates["name"] = name
     if main_ingredient is not None:
-        updates["main_ingredient"] = main_ingredient
+        updates["main ingredient"] = main_ingredient
     if detected_condition is not None:
         cond_list = clean_conditions(detected_condition)
-        updates["detected_condition"] = cond_list
-        updates["tags"] = cond_list
+        updates["detected conditions"] = cond_list
     if how_it_improves is not None:
-        updates["how_it_improves"] = how_it_improves
-        updates["benefit"] = how_it_improves
-    if links is not None:
-        updates["links"] = clean_list(links)
-    if priority is not None:
-        updates["priority"] = priority
+        updates["how to improves"] = how_it_improves
         
     if file:
         if not file.content_type.startswith("image/"):
             raise HTTPException(400, "Only image allowed")
-        file_path = f"nutrition/{id}.png"
+        file_path = f"nutrition/{actual_id}.png"
         public_url = await upload_image(file, file_path)
-        updates["icon_url"] = public_url
+        updates["image url"] = public_url
         
     if updates:
-        nutritions_collection.update_one({"id": id}, {"$set": updates})
+        nutritions_collection.update_one(query_filter, {"$set": updates})
         
-    res = nutritions_collection.find_one({"id": id})
+    res = nutritions_collection.find_one(query_filter)
     res["_id"] = str(res["_id"])
     return {"message": "Nutrition updated", "data": res}
 
 
 @router.delete("/nutrition/{id}")
 async def delete_nutrition(id: str):
-    existing = nutritions_collection.find_one({"id": id})
+    query_filter = get_nutrition_filter(id)
+    existing = nutritions_collection.find_one(query_filter)
     if not existing:
         raise HTTPException(404, "Nutrition not found")
-    nutritions_collection.delete_one({"id": id})
+    nutritions_collection.delete_one(query_filter)
     return {"message": "Nutrition deleted successfully"}
 
 

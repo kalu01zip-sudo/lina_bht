@@ -79,7 +79,7 @@ async def upload_scalp_image(
             detected_condition_names.append(cname.strip().lower().replace(" ", "_"))
 
     # Fetch matching recommendations directly from MongoDB collections based on conditions
-    nutrition_cursor = nutritions_collection.find({"detected_condition": {"$in": detected_condition_names}})
+    nutrition_cursor = nutritions_collection.find({"detected conditions": {"$in": detected_condition_names}})
     nutrition_data = []
     for doc in nutrition_cursor:
         doc["_id"] = str(doc["_id"])
