@@ -1,6 +1,8 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from typing import Optional, List
 import uuid
+import io
+from PIL import Image
 from bson import ObjectId
 from app.core.s3_client import upload_file_to_s3
 from app.core.mongo_client import nutritions_collection, foods_collection, recipes_collection
@@ -17,6 +19,23 @@ def normalize_id(raw_id: str) -> str:
 
 
 def get_nutrition_filter(id_str: str) -> dict:
+    normalized = normalize_id(id_str)
+    try:
+        oid = ObjectId(id_str)
+        return {"$or": [{"id": normalized}, {"_id": oid}]}
+    except Exception:
+        return {"id": normalized}
+
+
+def get_food_filter(id_str: str) -> dict:
+    normalized = normalize_id(id_str)
+    try:
+        oid = ObjectId(id_str)
+        return {"$or": [{"id": normalized}, {"_id": oid}]}
+    except Exception:
+        return {"id": normalized}
+
+def get_recipe_filter(id_str: str) -> dict:
     normalized = normalize_id(id_str)
     try:
         oid = ObjectId(id_str)
@@ -77,8 +96,27 @@ async def upload_nutrition(
         link_list = []
         priority = 1
 
+        # Read, resize to 128x128, and convert to PNG bytes
+        try:
+            file_bytes = await file.read()
+            img = Image.open(io.BytesIO(file_bytes))
+            img = img.resize((64, 64), Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            img.save(output, format="PNG")
+            resized_bytes = output.getvalue()
+        except Exception as e:
+            raise HTTPException(400, f"Invalid image or resizing failed: {str(e)}")
+
         file_path = f"nutrition/{id}.png"
-        public_url = await upload_image(file, file_path)
+        try:
+            public_url = await upload_file_to_s3(
+                resized_bytes,
+                file_path,
+                "image/png"
+            )
+        except Exception as e:
+            print("UPLOAD ERROR:", e)
+            raise HTTPException(500, f"Upload failed: {str(e)}")
 
         nutritions_collection.insert_one({
             "id": id,
@@ -105,28 +143,44 @@ async def upload_nutrition(
 @router.post("/food")
 async def upload_food(
     file: UploadFile = File(...),
-    id: str = Form(...),
     name: str = Form(...),
     ingredients: str = Form(...),
     detected_condition: str = Form(...),
-    benefits: str = Form(...),
-    links: str = Form("")
+    benefits: str = Form(...)
 ):
     try:
         if not file.content_type.startswith("image/"):
             raise HTTPException(400, "Only image allowed")
 
-        id = normalize_id(id)
+        base_id = normalize_id(name)
+        id = base_id
+        while foods_collection.find_one({"id": id}):
+            id = f"{base_id}_{uuid.uuid4().hex[:6]}"
+
         ing_list = clean_list(ingredients)
         cond_list = clean_conditions(detected_condition)
-        link_list = clean_list(links)
 
-        existing = foods_collection.find_one({"id": id})
-        if existing:
-            raise HTTPException(400, "ID already exists")
+        # Read, resize to 128x128, and convert to PNG bytes
+        try:
+            file_bytes = await file.read()
+            img = Image.open(io.BytesIO(file_bytes))
+            img = img.resize((128, 128), Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            img.save(output, format="PNG")
+            resized_bytes = output.getvalue()
+        except Exception as e:
+            raise HTTPException(400, f"Invalid image or resizing failed: {str(e)}")
 
         file_path = f"food/{id}.png"
-        public_url = await upload_image(file, file_path)
+        try:
+            public_url = await upload_file_to_s3(
+                resized_bytes,
+                file_path,
+                "image/png"
+            )
+        except Exception as e:
+            print("UPLOAD ERROR:", e)
+            raise HTTPException(500, f"Upload failed: {str(e)}")
 
         foods_collection.insert_one({
             "id": id,
@@ -134,19 +188,19 @@ async def upload_food(
             "ingredients": ing_list,
             "detected_condition": cond_list,
             "benefits": benefits,
-            "links": link_list,
             "icon_url": public_url,
             # Backwards compatibility
             "tags": cond_list
         })
 
-        return {"message": "Food uploaded", "url": public_url}
+        return {"message": "Food uploaded", "id": id, "url": public_url}
 
     except HTTPException:
         raise
     except Exception as e:
         print("ERROR:", e)
         raise HTTPException(500, str(e))
+
 
 
 # =========================
@@ -156,44 +210,60 @@ async def upload_food(
 @router.post("/recipe")
 async def upload_recipe(
     file: UploadFile = File(...),
-    id: str = Form(...),
-    recipe_name: str = Form(...),
+    name: str = Form(...),
     main_ingredients: str = Form(...),
     detected_condition: str = Form(...),
     how_it_improves: str = Form(...),
-    tags: str = Form(""),
-    links: str = Form("")
+    tags: str = Form("")
 ):
     try:
+        # Validate image type
         if not file.content_type.startswith("image/"):
             raise HTTPException(400, "Only image allowed")
 
-        id = normalize_id(id)
+        # Generate ID from recipe name and ensure uniqueness
+        base_id = normalize_id(name)
+        id = base_id
+        while recipes_collection.find_one({"id": id}):
+            id = f"{base_id}_{uuid.uuid4().hex[:6]}"
         ing_list = clean_list(main_ingredients)
         cond_list = clean_conditions(detected_condition)
         tag_list = clean_list(tags)
-        link_list = clean_list(links)
 
-        existing = recipes_collection.find_one({"id": id})
-        if existing:
+        # Ensure no duplicate ID
+        if recipes_collection.find_one({"id": id}):
             raise HTTPException(400, "ID already exists")
 
+        # Resize image to 1920x1080 and upload to S3
+        try:
+            file_bytes = await file.read()
+            img = Image.open(io.BytesIO(file_bytes))
+            img = img.resize((1280, 720), Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            img.save(output, format="PNG")
+            resized_bytes = output.getvalue()
+        except Exception as e:
+            raise HTTPException(400, f"Invalid image or resizing failed: {str(e)}")
+
         file_path = f"recipe/{id}.png"
-        public_url = await upload_image(file, file_path)
+        try:
+            public_url = await upload_file_to_s3(
+                resized_bytes,
+                file_path,
+                "image/png"
+            )
+        except Exception as e:
+            print("UPLOAD ERROR:", e)
+            raise HTTPException(500, f"Upload failed: {str(e)}")
 
         recipes_collection.insert_one({
             "id": id,
-            "recipe_name": recipe_name,
+            "name": name,
             "main_ingredients": ing_list,
             "detected_condition": cond_list,
             "how_it_improves": how_it_improves,
             "tags": tag_list,
-            "links": link_list,
-            "image_url": public_url,
-            # Backwards compatibility
-            "name": recipe_name,
-            "description": how_it_improves,
-            "meal_type": "main"
+            "image_url": public_url
         })
 
         return {"message": "Recipe uploaded", "url": public_url}
@@ -293,7 +363,7 @@ async def list_food():
 
 @router.get("/food/{id}")
 async def get_food(id: str):
-    doc = foods_collection.find_one({"id": id})
+    doc = foods_collection.find_one(get_food_filter(id))
     if not doc:
         raise HTTPException(404, "Food not found")
     doc["_id"] = str(doc["_id"])
@@ -301,19 +371,21 @@ async def get_food(id: str):
 
 
 @router.put("/food/{id}")
+@router.put("/food/{id}")
 async def update_food(
     id: str,
     file: UploadFile = File(None),
     name: Optional[str] = Form(None),
     ingredients: Optional[str] = Form(None),
     detected_condition: Optional[str] = Form(None),
-    benefits: Optional[str] = Form(None),
-    links: Optional[str] = Form(None)
+    benefits: Optional[str] = Form(None)
 ):
-    existing = foods_collection.find_one({"id": id})
+    query_filter = get_food_filter(id)
+    existing = foods_collection.find_one(query_filter)
     if not existing:
         raise HTTPException(404, "Food not found")
-        
+
+    actual_id = existing["id"]
     updates = {}
     if name is not None:
         updates["name"] = name
@@ -325,30 +397,29 @@ async def update_food(
         updates["tags"] = cond_list
     if benefits is not None:
         updates["benefits"] = benefits
-    if links is not None:
-        updates["links"] = clean_list(links)
-        
+
     if file:
         if not file.content_type.startswith("image/"):
             raise HTTPException(400, "Only image allowed")
-        file_path = f"food/{id}.png"
+        file_path = f"food/{actual_id}.png"
         public_url = await upload_image(file, file_path)
         updates["icon_url"] = public_url
-        
+
     if updates:
-        foods_collection.update_one({"id": id}, {"$set": updates})
-        
-    res = foods_collection.find_one({"id": id})
+        foods_collection.update_one(query_filter, {"$set": updates})
+
+    res = foods_collection.find_one(query_filter)
     res["_id"] = str(res["_id"])
     return {"message": "Food updated", "data": res}
 
 
 @router.delete("/food/{id}")
 async def delete_food(id: str):
-    existing = foods_collection.find_one({"id": id})
+    query_filter = get_food_filter(id)
+    existing = foods_collection.find_one(query_filter)
     if not existing:
         raise HTTPException(404, "Food not found")
-    foods_collection.delete_one({"id": id})
+    foods_collection.delete_one(query_filter)
     return {"message": "Food deleted successfully"}
 
 
@@ -366,7 +437,12 @@ async def list_recipe():
 
 @router.get("/recipe/{id}")
 async def get_recipe(id: str):
-    doc = recipes_collection.find_one({"id": id})
+    # Attempt to find by ObjectId first, otherwise by custom string id
+    try:
+        oid = ObjectId(id)
+        doc = recipes_collection.find_one({"_id": oid})
+    except Exception:
+        doc = recipes_collection.find_one({"id": normalize_id(id)})
     if not doc:
         raise HTTPException(404, "Recipe not found")
     doc["_id"] = str(doc["_id"])
@@ -377,21 +453,19 @@ async def get_recipe(id: str):
 async def update_recipe(
     id: str,
     file: UploadFile = File(None),
-    recipe_name: Optional[str] = Form(None),
+    name: Optional[str] = Form(None),
     main_ingredients: Optional[str] = Form(None),
     detected_condition: Optional[str] = Form(None),
     how_it_improves: Optional[str] = Form(None),
-    tags: Optional[str] = Form(None),
-    links: Optional[str] = Form(None)
+    tags: Optional[str] = Form(None)
 ):
     existing = recipes_collection.find_one({"id": id})
     if not existing:
         raise HTTPException(404, "Recipe not found")
-        
+
     updates = {}
-    if recipe_name is not None:
-        updates["recipe_name"] = recipe_name
-        updates["name"] = recipe_name
+    if name is not None:
+        updates["name"] = name
     if main_ingredients is not None:
         updates["main_ingredients"] = clean_list(main_ingredients)
     if detected_condition is not None:
@@ -401,28 +475,32 @@ async def update_recipe(
         updates["description"] = how_it_improves
     if tags is not None:
         updates["tags"] = clean_list(tags)
-    if links is not None:
-        updates["links"] = clean_list(links)
-        
     if file:
         if not file.content_type.startswith("image/"):
             raise HTTPException(400, "Only image allowed")
         file_path = f"recipe/{id}.png"
         public_url = await upload_image(file, file_path)
         updates["image_url"] = public_url
-        
+
     if updates:
         recipes_collection.update_one({"id": id}, {"$set": updates})
-        
+
     res = recipes_collection.find_one({"id": id})
     res["_id"] = str(res["_id"])
     return {"message": "Recipe updated", "data": res}
 
 
+
+
 @router.delete("/recipe/{id}")
 async def delete_recipe(id: str):
-    existing = recipes_collection.find_one({"id": id})
-    if not existing:
+    # Try to delete by Mongo ObjectId first
+    try:
+        oid = ObjectId(id)
+        result = recipes_collection.delete_one({"_id": oid})
+    except Exception:
+        # Fallback to custom string id (normalized)
+        result = recipes_collection.delete_one({"id": normalize_id(id)})
+    if result.deleted_count == 0:
         raise HTTPException(404, "Recipe not found")
-    recipes_collection.delete_one({"id": id})
     return {"message": "Recipe deleted successfully"}

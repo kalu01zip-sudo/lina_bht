@@ -76,7 +76,6 @@ def run_tests():
 
     # 2. FOOD CRUD TEST
     print("\n--- Testing FOOD CRUD ---")
-    food_id = f"test_food_{uuid.uuid4().hex[:6]}"
     
     # POST
     dummy_image = get_dummy_image()
@@ -84,16 +83,15 @@ def run_tests():
     post_res = client.post(
         "/admin/food",
         data={
-            "id": food_id,
             "name": "Test Food",
             "ingredients": "Test Ingredient",
             "detected_condition": "acne,dryness",
-            "benefits": "Test benefits",
-            "links": "http://example.com/food"
+            "benefits": "Test benefits"
         },
         files={"file": ("food.png", dummy_image, "image/png")}
     )
     assert post_res.status_code == 200, f"Food creation failed: {post_res.text}"
+    food_id = post_res.json()["id"]
     print("[PASS] POST /admin/food")
 
     # GET List
