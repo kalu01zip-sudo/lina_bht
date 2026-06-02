@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
 from typing import Optional, List
 import uuid
 import io
@@ -6,8 +6,9 @@ from PIL import Image
 from bson import ObjectId
 from app.core.s3_client import upload_file_to_s3
 from app.core.mongo_client import nutritions_collection, foods_collection, recipes_collection
+from app.routers.admin_auth import _get_current_admin
 
-router = APIRouter(prefix="/admin", tags=["Admin Upload"])
+router = APIRouter(prefix="/admin", tags=["Admin Upload"], dependencies=[Depends(_get_current_admin)])
 
 
 # =========================
@@ -72,7 +73,7 @@ async def upload_image(file: UploadFile, file_path: str) -> str:
 
 
 # =========================
-# 1. NUTRITION API
+# 1. NUTRITION, FOOD & RECIPE MANAGEMENT
 # =========================
 
 @router.post("/nutrition")
@@ -278,8 +279,8 @@ async def upload_recipe(
 # ── NUTRITION CRUD (GET, PUT, DELETE) ──────────────────────────────────────────
 
 @router.get("/nutrition")
-async def list_nutrition():
-    cursor = nutritions_collection.find({}).sort("priority", -1)
+async def list_nutrition(limit: int = Query(20, ge=1), skip: int = Query(0, ge=0)):
+    cursor = nutritions_collection.find({}).sort("priority", -1).skip(skip).limit(limit)
     results = []
     for doc in cursor:
         doc["_id"] = str(doc["_id"])
@@ -352,8 +353,8 @@ async def delete_nutrition(id: str):
 # ── FOOD CRUD (GET, PUT, DELETE) ──────────────────────────────────────────────
 
 @router.get("/food")
-async def list_food():
-    cursor = foods_collection.find({})
+async def list_food(limit: int = Query(20, ge=1), skip: int = Query(0, ge=0)):
+    cursor = foods_collection.find({}).skip(skip).limit(limit)
     results = []
     for doc in cursor:
         doc["_id"] = str(doc["_id"])
@@ -426,8 +427,8 @@ async def delete_food(id: str):
 # ── RECIPE CRUD (GET, PUT, DELETE) ────────────────────────────────────────────
 
 @router.get("/recipe")
-async def list_recipe():
-    cursor = recipes_collection.find({})
+async def list_recipe(limit: int = Query(20, ge=1), skip: int = Query(0, ge=0)):
+    cursor = recipes_collection.find({}).skip(skip).limit(limit)
     results = []
     for doc in cursor:
         doc["_id"] = str(doc["_id"])
@@ -504,3 +505,13 @@ async def delete_recipe(id: str):
     if result.deleted_count == 0:
         raise HTTPException(404, "Recipe not found")
     return {"message": "Recipe deleted successfully"}
+
+# =========================
+# 2. ARTICLE MANAGEMENT
+# =========================
+# TODO: implement article CRUD endpoints (GET, POST, PUT, DELETE)
+
+# =========================
+# 3. ROUTINE VIDEO MANAGEMENT
+# =========================
+# TODO: implement routine video CRUD endpoints (GET, POST, PUT, DELETE)

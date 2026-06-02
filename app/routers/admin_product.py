@@ -1,11 +1,12 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from typing import Optional
 from PIL import Image
 import io
 from app.core.s3_client import upload_file_to_s3
 from app.core.mongo_client import products_collection
+from app.routers.admin_auth import _get_current_admin
 
-router = APIRouter(prefix="/admin", tags=["Admin Upload"])
+router = APIRouter(prefix="/admin", tags=["Admin Upload"], dependencies=[Depends(_get_current_admin)])
 
 
 # =========================

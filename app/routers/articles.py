@@ -187,7 +187,7 @@ async def get_article_details(
 #  ADMIN-SIDE ENDPOINTS (tags=["Admin"])
 # ══════════════════════════════════════════════════════════════════════════════
 
-@admin_router.post("", status_code=201)
+@admin_router.post("/", status_code=201)
 async def create_article(
     current_admin: CurrentAdmin,
     title: str = Form(...),
@@ -196,9 +196,7 @@ async def create_article(
     read_time: str = Form(...),
     content: str = Form(...),
     image_file: UploadFile = File(None),
-    video_file: UploadFile = File(None),
-    image_url: Optional[str] = Form(None),
-    video_url: Optional[str] = Form(None)
+    video_file: UploadFile = File(None)
 ):
     """
     Create a new article.
@@ -207,7 +205,7 @@ async def create_article(
     article_id = str(ObjectId())
 
     # Cover image upload
-    final_image_url = image_url
+    final_image_url = None
     if image_file:
         _, ext = os.path.splitext(image_file.filename or "")
         if not ext:
@@ -216,7 +214,7 @@ async def create_article(
         final_image_url = await upload_file_to_s3_helper("assets", image_file, file_path)
 
     # Video upload
-    final_video_url = video_url
+    final_video_url = None
     if video_file:
         _, ext = os.path.splitext(video_file.filename or "")
         if not ext:
@@ -261,6 +259,21 @@ async def admin_list_articles(
         articles.append(_fmt_article(doc))
 
     return articles
+
+@admin_router.get("/{article_id}", response_model=ArticleDetailResponse)
+async def admin_get_article(
+    article_id: str,
+    current_admin: CurrentAdmin,
+):
+    """Retrieve a single article by ID for admin purposes."""
+    try:
+        oid = ObjectId(article_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid article ID format")
+    doc = await articles_col().find_one({"_id": oid})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return _fmt_article(doc)
 
 
 @admin_router.put("/{article_id}")
