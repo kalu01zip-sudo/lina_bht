@@ -1,0 +1,11 @@
+services:
+  api:
+    build: .
+    container_name: lina_backend
+    restart: always
+
+    env_file:
+      - .env
+
+    ports:
+      - "8000:8000"
