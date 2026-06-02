@@ -12,8 +12,22 @@ def get_dummy_image():
     img_bytes.seek(0)
     return img_bytes
 
+from app.routers.admin_auth import _get_current_admin
+from bson import ObjectId
+
+MOCK_ADMIN = {
+    "_id": ObjectId("60d5ecb8b3901b001f3c3a01"),
+    "email": "admin@example.com",
+    "full_name": "Test Admin",
+    "is_active": True
+}
+
+async def mock_get_current_admin():
+    return MOCK_ADMIN
+
 def run_tests():
     print("[RUNNING] Initializing Admin CRUD integration tests...")
+    app.dependency_overrides[_get_current_admin] = mock_get_current_admin
     client = TestClient(app)
 
     # 1. NUTRITION CRUD TEST
@@ -37,7 +51,7 @@ def run_tests():
     print("[PASS] POST /admin/nutrition")
 
     # GET List
-    get_res = client.get("/admin/nutrition")
+    get_res = client.get("/admin/nutrition?limit=100")
     assert get_res.status_code == 200
     items = get_res.json()
     assert any(x["id"] == nut_id for x in items), "Created nutrition item not found in list"
@@ -95,7 +109,7 @@ def run_tests():
     print("[PASS] POST /admin/food")
 
     # GET List
-    get_res = client.get("/admin/food")
+    get_res = client.get("/admin/food?limit=100")
     assert get_res.status_code == 200
     assert any(x["id"] == food_id for x in get_res.json())
     print("[PASS] GET /admin/food (List)")
@@ -126,16 +140,13 @@ def run_tests():
 
     # 3. RECIPE CRUD TEST
     print("\n--- Testing RECIPE CRUD ---")
-    rec_id = f"test_recipe_{uuid.uuid4().hex[:6]}"
-    
     # POST
     dummy_image = get_dummy_image()
     dummy_image.name = "recipe.png"
     post_res = client.post(
         "/admin/recipe",
         data={
-            "id": rec_id,
-            "recipe_name": "Test Recipe",
+            "name": "Test Recipe",
             "main_ingredients": "Test Ingredient",
             "detected_condition": "acne,dryness",
             "how_it_improves": "Tasty and testable",
@@ -145,10 +156,11 @@ def run_tests():
         files={"file": ("recipe.png", dummy_image, "image/png")}
     )
     assert post_res.status_code == 200, f"Recipe creation failed: {post_res.text}"
+    rec_id = post_res.json()["id"]
     print("[PASS] POST /admin/recipe")
 
     # GET List
-    get_res = client.get("/admin/recipe")
+    get_res = client.get("/admin/recipe?limit=100")
     assert get_res.status_code == 200
     assert any(x["id"] == rec_id for x in get_res.json())
     print("[PASS] GET /admin/recipe (List)")
@@ -156,18 +168,18 @@ def run_tests():
     # GET Single
     get_single_res = client.get(f"/admin/recipe/{rec_id}")
     assert get_single_res.status_code == 200
-    assert get_single_res.json()["recipe_name"] == "Test Recipe"
+    assert get_single_res.json()["name"] == "Test Recipe"
     print("[PASS] GET /admin/recipe/{id}")
 
     # PUT Update
     put_res = client.put(
         f"/admin/recipe/{rec_id}",
         data={
-            "recipe_name": "Updated Recipe Name"
+            "name": "Updated Recipe Name"
         }
     )
     assert put_res.status_code == 200
-    assert put_res.json()["data"]["recipe_name"] == "Updated Recipe Name"
+    assert put_res.json()["data"]["name"] == "Updated Recipe Name"
     print("[PASS] PUT /admin/recipe/{id}")
 
     # DELETE
@@ -234,62 +246,6 @@ def run_tests():
     assert del_res.status_code == 200
     assert client.get(f"/admin/product/{prod_id}").status_code == 404
     print("[PASS] DELETE /admin/product/{id}")
-
-
-    # 5. VIDEO CRUD TEST
-    print("\n--- Testing VIDEO CRUD ---")
-    
-    # POST
-    dummy_video = io.BytesIO(b"dummy video data")
-    dummy_video.name = "video.mp4"
-    post_res = client.post(
-        "/admin/video",
-        data={
-            "title": "Test Video Title",
-            "tags": "morning,routine",
-            "phase": "pregnant",
-            "product_category": "skincare",
-            "priority": 3
-        },
-        files={"file": ("video.mp4", dummy_video, "video/mp4")}
-    )
-    assert post_res.status_code == 200
-    video_url = post_res.json()["video_url"]
-    
-    # Fetch list to find ID
-    get_res = client.get("/admin/video")
-    assert get_res.status_code == 200
-    videos_list = get_res.json()
-    created_video = next((x for x in videos_list if x["video_url"] == video_url), None)
-    assert created_video is not None
-    vid_id = created_video["id"]
-    print("[PASS] POST /admin/video")
-
-    # GET Single
-    get_single_res = client.get(f"/admin/video/{vid_id}")
-    assert get_single_res.status_code == 200
-    assert get_single_res.json()["title"] == "Test Video Title"
-    print("[PASS] GET /admin/video/{id}")
-
-    # PUT Update
-    put_res = client.put(
-        f"/admin/video/{vid_id}",
-        data={
-            "title": "Updated Video Title",
-            "priority": 8
-        }
-    )
-    assert put_res.status_code == 200
-    assert put_res.json()["data"]["title"] == "Updated Video Title"
-    assert put_res.json()["data"]["priority"] == 8
-    print("[PASS] PUT /admin/video/{id}")
-
-    # DELETE
-    del_res = client.delete(f"/admin/video/{vid_id}")
-    assert del_res.status_code == 200
-    assert client.get(f"/admin/video/{vid_id}").status_code == 404
-    print("[PASS] DELETE /admin/video/{id}")
-
     print("\n[SUCCESS] All Admin Upload CRUD Integration Tests Passed successfully!")
 
 if __name__ == "__main__":

@@ -123,7 +123,7 @@ async def upload_nutrition(
             "id": id,
             "name": name,
             "main ingredient": main_ingredient,
-            "detected conditions": cond_list,
+            "detected_condition": cond_list,
             "how to improves": how_it_improves,
             "image url": public_url
         })
@@ -267,7 +267,7 @@ async def upload_recipe(
             "image_url": public_url
         })
 
-        return {"message": "Recipe uploaded", "url": public_url}
+        return {"message": "Recipe uploaded", "id": id, "url": public_url}
 
     except HTTPException:
         raise
@@ -321,7 +321,7 @@ async def update_nutrition(
         updates["main ingredient"] = main_ingredient
     if detected_condition is not None:
         cond_list = clean_conditions(detected_condition)
-        updates["detected conditions"] = cond_list
+        updates["detected_condition"] = cond_list
     if how_it_improves is not None:
         updates["how to improves"] = how_it_improves
         

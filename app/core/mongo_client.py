@@ -36,7 +36,7 @@ def fetch_all_detected_conditions() -> list[str]:
     conditions = set()
     try:
         # Get distinct from nutritions
-        for c in nutritions_collection.distinct("detected conditions"):
+        for c in nutritions_collection.distinct("detected_condition"):
             if c:
                 if isinstance(c, list):
                     for item in c:
