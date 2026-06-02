@@ -2,17 +2,17 @@
 
 # Normalize incoming condition names
 def normalize_condition(name: str) -> str:
-    return name.lower().strip()
+    return name.strip().lower().replace(" ", "_").replace("-", "_")
 
 
 # Alias mapping (AI → system standard)
 CONDITION_ALIAS = {
-    "seborrheic dermatitis": "acne",
+    "seborrheic_dermatitis": "acne",
     "hyperpigmentation": "pigmentation",
     "dehydration": "dryness",
-    "redness irritation": "irritation",
-    "skin dehydration": "dryness",
-    "sebaceous hypersecretion": "acne",
+    "redness_irritation": "irritation",
+    "skin_dehydration": "dryness",
+    "sebaceous_hypersecretion": "acne",
 }
 
 
