@@ -110,7 +110,9 @@ async def list_articles(
     current_user: CurrentUser,
     search: Optional[str] = Query(None, description="Search term in title, description, or content"),
     category: Optional[str] = Query(None, description="Filter by category (e.g. Skin Health)"),
-    recommended: Optional[bool] = Query(None, description="If true, sort by popularity (views)")
+    recommended: Optional[bool] = Query(None, description="If true, sort by popularity (views)"),
+    limit: int = Query(50, ge=1, le=200, description="Limit the number of returned articles"),
+    offset: int = Query(0, ge=0, description="Offset for pagination")
 ):
     """
     Fetch the list of articles.
@@ -136,7 +138,7 @@ async def list_articles(
         sort_opts = [("views", -1), ("created_at", -1)]
 
     cursor = articles_col().find(query, projection={"content": False})
-    cursor.sort(sort_opts)
+    cursor.sort(sort_opts).skip(offset).limit(limit)
 
     articles = []
     async for doc in cursor:
@@ -187,7 +189,7 @@ async def get_article_details(
 #  ADMIN-SIDE ENDPOINTS (tags=["Admin"])
 # ══════════════════════════════════════════════════════════════════════════════
 
-@admin_router.post("/", status_code=201)
+@admin_router.post("", status_code=201)
 async def create_article(
     current_admin: CurrentAdmin,
     title: str = Form(...),

@@ -106,6 +106,39 @@ def run_tests():
     assert any(a["id"] == article_id for a in search_list)
     print("[PASS] GET /articles: Search query works correctly")
 
+    # 4d. Pagination (limit and offset)
+    create_payload_2 = {
+        "title": "TEST_ARTICLE_2",
+        "description": "Learn about skin hydration.",
+        "category": "Skin Health",
+        "read_time": "5 min read",
+        "content": "# Markdown Body Content\nHydrate your skin!",
+        "image_url": "https://example.com/cover2.png",
+        "video_url": "https://example.com/video2.mp4"
+    }
+    reset_db_client()
+    response = client.post("/admin/articles", data=create_payload_2)
+    assert response.status_code == 201
+    article_2_id = response.json()["article"]["id"]
+
+    reset_db_client()
+    response = client.get("/articles?limit=1")
+    assert response.status_code == 200
+    limit_list = response.json()
+    assert len(limit_list) == 1
+
+    reset_db_client()
+    response = client.get("/articles?limit=1&offset=1")
+    assert response.status_code == 200
+    offset_list = response.json()
+    assert len(offset_list) == 1
+    assert offset_list[0]["id"] != limit_list[0]["id"]
+
+    reset_db_client()
+    response = client.delete(f"/admin/articles/{article_2_id}")
+    assert response.status_code == 200
+    print("[PASS] GET /articles: Pagination limit and offset work correctly")
+
     # 5. Test GET /articles/{id} (Fetch Details & Increment Views)
     # Initial fetch
     reset_db_client()
