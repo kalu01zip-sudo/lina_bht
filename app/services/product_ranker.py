@@ -1,4 +1,5 @@
 from app.core.mongo_client import products_collection
+from app.services.product_catalog_service import serialize_product_doc
 
 
 # ==========================================
@@ -16,10 +17,16 @@ def score_product(
     tags = product.get(
         "tags",
         []
+    ) or product.get(
+        "categories",
+        []
     ) or []
 
     concerns = product.get(
         "concerns",
+        []
+    ) or product.get(
+        "detected_conditions",
         []
     ) or []
 
@@ -81,8 +88,7 @@ def fetch_best_product(
 ):
     try:
         products = list(products_collection.find(
-            {"category": category},
-            {"_id": 0}
+            {"$or": [{"categories": category}, {"category": category}]}
         ))
     except Exception:
         return None
@@ -102,7 +108,7 @@ def fetch_best_product(
 
         ranked.append({
             "score": score,
-            "product": product
+            "product": serialize_product_doc(product)
         })
 
     ranked.sort(

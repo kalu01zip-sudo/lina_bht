@@ -1,5 +1,6 @@
 import logging
 from app.core.mongo_client import products_collection
+from app.services.product_catalog_service import serialize_product_doc
 
 
 def match_product(category: str, focus: str):
@@ -8,26 +9,30 @@ def match_product(category: str, focus: str):
 
     # Try to find a product matching both category and concern
     doc = products_collection.find_one(
-        {"category": category, "concerns": focus},
-        {"_id": 0},
+        {
+            "$and": [
+                {"$or": [{"categories": category}, {"category": category}]},
+                {"$or": [{"detected_conditions": focus}, {"concerns": focus}]},
+            ]
+        },
         sort=[("priority", 1)]
     )
 
     if doc:
-        return doc
+        return serialize_product_doc(doc)
 
     # fallback — any product in category
     doc = products_collection.find_one(
-        {"category": category},
-        {"_id": 0}
+        {"$or": [{"categories": category}, {"category": category}]}
     )
-    return doc
+    return serialize_product_doc(doc)
 
 
 def get_all_categories():
     try:
-        categories = products_collection.distinct("category")
-        return list(set(c for c in categories if c))
+        legacy_categories = products_collection.distinct("category")
+        categories = products_collection.distinct("categories")
+        return list(set(c for c in [*legacy_categories, *categories] if c))
     except Exception as exc:
         logging.getLogger(__name__).warning(
             "Failed to fetch product categories from MongoDB: %s", exc

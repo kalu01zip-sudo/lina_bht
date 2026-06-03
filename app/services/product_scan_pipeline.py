@@ -19,6 +19,17 @@ from app.services.ingredient_intelligence_engine import (
     calculate_ingredient_intelligence
 )
 
+import httpx
+from urllib.parse import quote
+
+
+OPEN_BEAUTY_FACTS_PRODUCT_URL = "https://world.openbeautyfacts.org/api/v2/product/{}.json"
+OPEN_PRODUCTS_FACTS_PRODUCT_URL = "https://world.openproductsfacts.org/api/v2/product/{}.json"
+BARCODE_LOOKUP_TIMEOUT = 8.0
+BARCODE_LOOKUP_HEADERS = {
+    "User-Agent": "SkinSense/1.0 (contact@skinsense.app)"
+}
+
 # ==========================================
 # FULL PRODUCT SCAN PIPELINE
 # ==========================================
@@ -224,6 +235,233 @@ async def run_product_scan_pipeline(
 
         "ingredient_intelligence":
             ingredient_intelligence,
+
+        **analysis_result
+    }
+
+
+# ==========================================
+# BARCODE / QR CODE LOOKUP HELPERS
+# ==========================================
+
+def _clean_ingredient_list(
+    ingredients_text: str,
+    ingredients: list
+):
+    values = []
+
+    for item in ingredients or []:
+        text = item.get("text") if isinstance(item, dict) else item
+        if text:
+            values.append(text)
+
+    if not values and ingredients_text:
+        values = ingredients_text.replace(";", ",").split(",")
+
+    cleaned = []
+
+    for value in values:
+        item = str(value).strip().lower().rstrip(".")
+        if item and item not in cleaned:
+            cleaned.append(item)
+
+    return cleaned
+
+
+def _first_category(product: dict):
+    categories_tags = product.get("categories_tags") or []
+
+    if categories_tags:
+        category = str(categories_tags[0]).replace("en:", "").replace("-", " ")
+        return category.strip().title()
+
+    categories = product.get("categories") or ""
+    if categories:
+        return categories.split(",")[0].strip()
+
+    return "Skincare"
+
+
+def _product_image_url(product: dict):
+    return (
+        product.get("image_front_url")
+        or product.get("image_url")
+        or product.get("selected_images", {})
+            .get("front", {})
+            .get("display", {})
+            .get("en")
+    )
+
+
+def _extract_barcode_product(product: dict, code: str):
+    ingredients_text = (
+        product.get("ingredients_text_en")
+        or product.get("ingredients_text")
+        or ""
+    )
+
+    return {
+        "barcode": code,
+        "product_name": (
+            product.get("product_name_en")
+            or product.get("product_name")
+            or product.get("generic_name_en")
+            or product.get("generic_name")
+            or "Unknown Product"
+        ),
+        "brand": product.get("brands") or "Unknown",
+        "category": _first_category(product),
+        "ingredients": _clean_ingredient_list(
+            ingredients_text=ingredients_text,
+            ingredients=product.get("ingredients") or []
+        ),
+        "image_url": _product_image_url(product),
+        "data_source": product.get("_skinsense_data_source"),
+    }
+
+
+async def fetch_product_by_code(
+    code: str
+):
+    encoded_code = quote(
+        code,
+        safe=""
+    )
+
+    async with httpx.AsyncClient(
+        headers=BARCODE_LOOKUP_HEADERS,
+        timeout=BARCODE_LOOKUP_TIMEOUT
+    ) as client:
+        for source, url_template in (
+            ("open_beauty_facts", OPEN_BEAUTY_FACTS_PRODUCT_URL),
+            ("open_products_facts", OPEN_PRODUCTS_FACTS_PRODUCT_URL),
+        ):
+            try:
+                response = await client.get(
+                    url_template.format(encoded_code)
+                )
+
+                if response.status_code != 200:
+                    continue
+
+                body = response.json()
+
+                if body.get("status") != 1 or not body.get("product"):
+                    continue
+
+                product = body["product"]
+                product["_skinsense_data_source"] = source
+                return _extract_barcode_product(
+                    product=product,
+                    code=code
+                )
+
+            except Exception:
+                continue
+
+    return None
+
+
+# ==========================================
+# PRODUCT CODE SCAN PIPELINE
+# ==========================================
+
+async def run_product_code_scan_pipeline(
+
+    user_id: str,
+
+    code: str
+):
+    extracted = await fetch_product_by_code(
+        code
+    )
+
+    if not extracted:
+        return None
+
+    context = build_product_scan_context(
+        user_id
+    )
+
+    latest_face_scan = context.get(
+        "latest_face_scan"
+    )
+
+    ingredient_memory = context.get(
+        "ingredient_memory",
+        {}
+    )
+
+    ingredient_conflicts = analyze_ingredient_conflicts(
+
+        current_ingredients=extracted.get(
+            "ingredients",
+            []
+        ),
+
+        ingredient_memory=ingredient_memory
+    )
+
+    ingredient_intelligence = calculate_ingredient_intelligence(
+
+        current_ingredients=extracted.get(
+            "ingredients",
+            []
+        ),
+
+        ingredient_memory=ingredient_memory
+    )
+
+    analysis_result = await generate_product_analysis(
+
+        extracted_product=extracted,
+
+        face_scan=latest_face_scan,
+
+        ingredient_memory=ingredient_memory,
+
+        ingredient_conflicts=ingredient_conflicts,
+
+        ingredient_intelligence=ingredient_intelligence
+    )
+
+    return {
+
+        "product": {
+
+            "name": extracted.get(
+                "product_name"
+            ),
+
+            "brand": extracted.get(
+                "brand"
+            ),
+
+            "category": extracted.get(
+                "category"
+            )
+        },
+
+        "detected_ingredients": extracted.get(
+            "ingredients",
+            []
+        ),
+
+        "ingredient_conflicts": ingredient_conflicts,
+
+        "ingredient_intelligence": ingredient_intelligence,
+
+        "barcode": extracted.get(
+            "barcode"
+        ),
+
+        "data_source": extracted.get(
+            "data_source"
+        ),
+
+        "image_url": extracted.get(
+            "image_url"
+        ),
 
         **analysis_result
     }

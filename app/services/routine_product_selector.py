@@ -1,6 +1,7 @@
 import random
 
 from app.core.mongo_client import products_collection
+from app.services.product_catalog_service import serialize_product_doc
 
 
 # ==========================================
@@ -12,13 +13,14 @@ def fetch_product_by_category(
 ):
     try:
         products = list(products_collection.find(
-            {"category": category},
-            {"_id": 0}
+            {"$or": [{"categories": category}, {"category": category}]}
         ).limit(20))
 
         if not products:
             return None
 
-        return random.choice(products)
+        return serialize_product_doc(
+            random.choice(products)
+        )
     except Exception:
         return None

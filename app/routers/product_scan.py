@@ -5,11 +5,14 @@ from fastapi import (
     HTTPException,
     Query
 )
+from pydantic import BaseModel, Field
+from pydantic import ConfigDict
 
 from app.routers.auth import CurrentUser
 
 from app.services.product_scan_pipeline import (
-    run_product_scan_pipeline
+    run_product_scan_pipeline,
+    run_product_code_scan_pipeline
 )
 
 from app.services.product_scan_history import (
@@ -27,6 +30,29 @@ router = APIRouter(
     prefix="/scan",
     tags=["Product Scan"]
 )
+
+
+class ProductCodeScanRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "code": "3600523457441"
+            }
+        }
+    )
+
+    code: str = Field(
+        ...,
+        min_length=4,
+        max_length=80,
+        description="Barcode, QR code value, UPC, or EAN number."
+    )
+
+
+def _normalize_scan_code(
+    code: str
+):
+    return str(code or "").strip()
 
 
 # ==========================================
@@ -165,6 +191,157 @@ async def scan_product(
             status_code=500,
 
             detail="Product scan failed"
+        )
+
+
+# ==========================================
+# PRODUCT CODE SCAN
+# ==========================================
+
+@router.post("/code")
+async def scan_product_code(
+    payload: ProductCodeScanRequest,
+    current_user: CurrentUser
+):
+
+    try:
+
+        code = _normalize_scan_code(
+            payload.code
+        )
+
+        ai_result = await run_product_code_scan_pipeline(
+
+            user_id=str(current_user["_id"]),
+
+            code=code
+        )
+
+        if not ai_result:
+
+            raise HTTPException(
+
+                status_code=404,
+
+                detail={
+                    "code": "PRODUCT_NOT_FOUND",
+                    "message": "No cosmetic product found for this barcode or QR code value."
+                }
+            )
+
+        catalog_product = create_product_if_missing(
+
+            extracted_product={
+
+                "product_name":
+                    ai_result["product"].get(
+                        "name"
+                    ),
+
+                "brand":
+                    ai_result["product"].get(
+                        "brand"
+                    ),
+
+                "category":
+                    ai_result["product"].get(
+                        "category"
+                    ),
+
+                "ingredients":
+                    ai_result.get(
+                        "detected_ingredients",
+                        []
+                    )
+            },
+
+            image_url=ai_result.get(
+                "image_url"
+            )
+        )
+
+        product_payload = {
+
+            **ai_result["product"],
+
+            "id":
+                catalog_product.get(
+                    "id"
+                ),
+
+            "image_url":
+                catalog_product.get(
+                    "image_url"
+                )
+        }
+
+        product_scan_id = save_product_scan(
+
+            user_id=str(current_user["_id"]),
+
+            scan_data={
+
+                "product": {
+
+                    **product_payload
+                },
+
+                "analysis":
+                    ai_result["analysis"],
+
+                "detected_ingredients":
+                    ai_result.get(
+                        "detected_ingredients",
+                        []
+                    ),
+
+                "barcode":
+                    ai_result.get(
+                        "barcode"
+                    ),
+
+                "data_source":
+                    ai_result.get(
+                        "data_source"
+                    )
+            }
+        )
+
+        response_payload = {
+            key: value
+            for key, value in ai_result.items()
+            if key not in ("barcode", "data_source", "image_url")
+        }
+
+        return {
+
+            "scan_id":
+                product_scan_id,
+
+            **response_payload,
+
+            "product":
+                product_payload,
+
+            "catalog_product":
+                catalog_product
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+
+        print(
+            "[ERROR] PRODUCT CODE SCAN ERROR:",
+            e
+        )
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail="Product code scan failed"
         )
     
 # ==========================================
