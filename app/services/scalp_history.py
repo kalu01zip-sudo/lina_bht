@@ -15,11 +15,11 @@ def save_scalp_scan_result(user_id: str, data: dict):
     res = scalp_scan_collection.insert_one(doc)
     return str(res.inserted_id)
 
-def get_scalp_scan_history(user_id: str, limit: int = 10):
+def get_scalp_scan_history(user_id: str, limit: int = 50, offset: int = 0):
     scans = scalp_scan_collection.find(
         {"user_id": user_id},
         {"analysis": 1, "images": 1, "created_at": 1}
-    ).sort("created_at", -1).limit(limit)
+    ).sort("created_at", -1).skip(offset).limit(limit)
 
     result = []
     for s in scans:

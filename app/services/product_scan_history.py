@@ -46,7 +46,11 @@ def get_recent_product_scans(
 
     user_id: str,
 
-    months: int = 2
+    months: int = 2,
+
+    limit: int = 50,
+
+    offset: int = 0
 ):
 
     since = datetime.utcnow() - timedelta(
@@ -64,7 +68,7 @@ def get_recent_product_scans(
     }).sort(
         "created_at",
         -1
-    )
+    ).skip(offset).limit(limit)
 
     result = []
 

@@ -6,7 +6,7 @@ from datetime import datetime
 # =========================
 # GET SCAN HISTORY (LIST)
 # =========================
-def get_scan_history(user_id: str, limit: int = 10):
+def get_scan_history(user_id: str, limit: int = 50, offset: int = 0):
     scans = scan_collection.find(
         {"user_id": user_id},
         {
@@ -14,7 +14,7 @@ def get_scan_history(user_id: str, limit: int = 10):
             "images": 1,        # 🔥 include images
             "created_at": 1
         }
-    ).sort("created_at", -1).limit(limit)
+    ).sort("created_at", -1).skip(offset).limit(limit)
 
     result = []
 

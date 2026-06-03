@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from typing import Annotated, List
 from app.services.face_validation import validate_image
 from app.services.face_ai import analyze_face_with_claude, verify_same_person
@@ -19,7 +19,6 @@ from app.core.recommender import smart_rank
 from app.services.scan_storage import save_scan_result
 from app.services.scan_history import get_scan_history, get_scan_by_id, get_all_scans_for_comparison, get_scan_analytics
 from app.services.scan_comparison_ai import generate_comparison_message
-from fastapi import HTTPException
 from app.routers.auth import CurrentUser, users_col
 from app.services.image_storage import upload_scan_image
 
@@ -164,13 +163,19 @@ async def upload_face_images(
     }
 
 @router.get("/history")
-async def scan_history(current_user: CurrentUser):
+async def scan_history(
+    current_user: CurrentUser,
+    limit: int = Query(50, ge=1, le=200, description="Limit the number of returned scans"),
+    offset: int = Query(0, ge=0, description="Offset for pagination")
+):
     user_id = str(current_user["_id"])
 
-    data = get_scan_history(user_id)
+    from app.core.mongo_client import scan_collection
+    total = scan_collection.count_documents({"user_id": user_id})
+    data = get_scan_history(user_id, limit=limit, offset=offset)
 
     return {
-        "total": len(data),
+        "total": total,
         "scans": data
     }
 @router.get("/analytics")

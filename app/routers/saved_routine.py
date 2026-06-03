@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import (
     BaseModel,
     Field
@@ -316,7 +316,9 @@ async def delete_routine_step(
 
 @router.get("/all")
 async def get_all_saved_routines(
-    current_user: CurrentUser
+    current_user: CurrentUser,
+    limit: int = Query(50, ge=1, le=200, description="Limit the number of returned routine steps"),
+    offset: int = Query(0, ge=0, description="Offset for pagination")
 ):
 
     try:
@@ -325,11 +327,13 @@ async def get_all_saved_routines(
             current_user["_id"]
         )
 
+        total = saved_routines_collection.count_documents({"user_id": user_id})
+
         # Fetch all routine steps for the current user
         cursor = saved_routines_collection.find(
             {"user_id": user_id},
             {"_id": 0}
-        ).sort("time", 1)
+        ).sort("time", 1).skip(offset).limit(limit)
 
         rows = list(cursor)
 
@@ -337,6 +341,7 @@ async def get_all_saved_routines(
 
         return {
             "success": True,
+            "total": total,
             "count": len(data),
             "data": data
         }

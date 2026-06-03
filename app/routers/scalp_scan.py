@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Query
 from typing import List
 from app.services.scalp_ai import analyze_scalp_with_claude, validate_scalp_or_hair_image
 from app.services.scalp_history import (
@@ -123,11 +123,17 @@ async def upload_scalp_image(
     }
 
 @router.get("/scalp/history")
-async def scalp_history(current_user: CurrentUser):
+async def scalp_history(
+    current_user: CurrentUser,
+    limit: int = Query(50, ge=1, le=200, description="Limit the number of returned scalp scans"),
+    offset: int = Query(0, ge=0, description="Offset for pagination")
+):
     user_id = str(current_user["_id"])
-    data = get_scalp_scan_history(user_id)
+    from app.core.mongo_client import scalp_scan_collection
+    total = scalp_scan_collection.count_documents({"user_id": user_id})
+    data = get_scalp_scan_history(user_id, limit=limit, offset=offset)
     return {
-        "total": len(data),
+        "total": total,
         "scans": data
     }
 

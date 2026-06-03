@@ -45,6 +45,7 @@ def get_user_notifications(
     user_id: str,
     limit: int = 20,
     unread_only: bool = False,
+    offset: int = 0,
 ) -> list[dict]:
     """Fetch notifications for a user, newest first."""
     try:
@@ -52,7 +53,7 @@ def get_user_notifications(
         if unread_only:
             query["is_read"] = False
 
-        cursor = lia_notifications_collection.find(query).sort("created_at", -1).limit(limit)
+        cursor = lia_notifications_collection.find(query).sort("created_at", -1).skip(offset).limit(limit)
         
         results = []
         for doc in cursor:

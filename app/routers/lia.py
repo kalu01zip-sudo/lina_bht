@@ -43,26 +43,36 @@ router = APIRouter(
 @router.get("/notifications")
 async def get_notifications(
     current_user: CurrentUser,
-    limit: int = Query(default=20, ge=1, le=100),
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     unread_only: bool = Query(default=False),
 ):
     """
     Fetch the user's Lia notifications, newest first.
 
     Query params:
-      - limit: max number of notifications (default 20, max 100)
+      - limit: max number of notifications (default 20, max 200)
+      - offset: offset for pagination (default 0)
       - unread_only: if true, only return unread notifications
     """
     user_id = str(current_user["_id"])
+
+    from app.core.mongo_client import lia_notifications_collection
+    query = {"user_id": user_id}
+    if unread_only:
+        query["is_read"] = False
+    total = lia_notifications_collection.count_documents(query)
 
     notifications = get_user_notifications(
         user_id=user_id,
         limit=limit,
         unread_only=unread_only,
+        offset=offset,
     )
 
     return {
         "success": True,
+        "total": total,
         "count": len(notifications),
         "notifications": notifications,
     }

@@ -2,7 +2,8 @@ from fastapi import (
     APIRouter,
     UploadFile,
     File,
-    HTTPException
+    HTTPException,
+    Query
 )
 
 from app.routers.auth import CurrentUser
@@ -172,17 +173,30 @@ async def scan_product(
 
 @router.get("/product/history")
 async def get_product_history(
-
-    current_user: CurrentUser
+    current_user: CurrentUser,
+    limit: int = Query(50, ge=1, le=200, description="Limit the number of returned product scans"),
+    offset: int = Query(0, ge=0, description="Offset for pagination")
 ):
 
     try:
+
+        from datetime import datetime, timedelta
+        from app.services.product_scan_history import product_scan_col
+        since = datetime.utcnow() - timedelta(days=30 * 2)
+        total = product_scan_col.count_documents({
+            "user_id": str(current_user["_id"]),
+            "created_at": {"$gte": since}
+        })
 
         scans = get_recent_product_scans(
 
             user_id=str(current_user["_id"]),
 
-            months=2
+            months=2,
+
+            limit=limit,
+
+            offset=offset
         )
 
         result = []
@@ -215,6 +229,7 @@ async def get_product_history(
             })
 
         return {
+            "total": total,
             "history": result
         }
 
