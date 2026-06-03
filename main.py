@@ -51,6 +51,7 @@ from app.routers import (
 )
 from app.routers import homepage
 from app.routers.articles import router as articles_router, admin_router as admin_articles_router
+from app.routers.admin_ai_config import router as admin_ai_config_router
 
 
 def _llm_label() -> str:
@@ -156,6 +157,7 @@ app.include_router(admin_product.router)
 app.include_router(saved_routine.router)
 
 app.include_router(admin_articles_router)
+app.include_router(admin_ai_config_router)
 
 app.include_router(admin_video.router)
 app.include_router(legal.router)

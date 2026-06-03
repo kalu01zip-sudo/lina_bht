@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from app.clients.claude_client import ClaudeClient, USE_LOCAL_LLM
 from app.core.database import get_db
 from app.routers.auth import _get_current_user
+from app.routers.admin_product import find_products_for_conditions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/scan", tags=["Scan"])
@@ -234,6 +235,38 @@ def _fmt_conditions(scan_doc: dict) -> str:
     return "; ".join(lines) if lines else "none detected"
 
 
+def _extract_condition_slugs(scan_doc: dict) -> list[str]:
+    """
+    Extract a flat list of condition/trigger slug strings from a scan document.
+    Used to query the product catalogue for real product matches.
+    """
+    slugs: list[str] = []
+    for t in scan_doc.get("detected_triggers", []):
+        if isinstance(t, dict):
+            name = t.get("trigger_name", "")
+            if name:
+                slugs.append(name.strip().lower().replace(" ", "_"))
+    for c in scan_doc.get("detected_conditions", []):
+        if isinstance(c, dict):
+            cond = c.get("condition", "")
+            if cond:
+                slugs.append(cond.strip().lower().replace(" ", "_"))
+    return slugs
+
+
+def _pick_db_product(scan_doc: dict) -> dict | None:
+    """
+    Try to find a real product from the admin catalogue that targets
+    the conditions detected in this scan.
+    Returns the first matched product dict, or None if catalogue is empty.
+    """
+    slugs = _extract_condition_slugs(scan_doc)
+    if not slugs:
+        return None
+    matches = find_products_for_conditions(slugs, limit=1)
+    return matches[0] if matches else None
+
+
 def _build_meta_prompt(
     scan_doc: dict,
     scan_type: str,
@@ -417,21 +450,32 @@ async def _insert_steps(
     Insert validated step dicts + their Phase 2 descriptions into MongoDB.
     All description calls run concurrently via asyncio.gather.
 
-    product_image_url resolution:
-      Source A (product scan) → uses scan_doc["product_image_url"] from OBF.
+    product_image_url resolution (priority order):
+      Source A (product scan) → scan_doc["product_image_url"] from OBF.
                                  Real product photo when barcode was found.
-      Source B (face/hair scan) → _category_icon(product_name).
-                                   Generic category icon from _CATEGORY_ICONS map.
+      Source C (DB catalogue)  → real product from admin product catalogue
+                                 matched by detected conditions.
+      Source B (fallback)      → _category_icon(product_name).
+                                 Generic category icon from _CATEGORY_ICONS map.
     """
     # Phase 2: generate all descriptions in parallel
     descriptions: list[StepDescription] = await asyncio.gather(
         *[_generate_description(s, user, scan_doc, scan_type) for s in steps]
     )
 
-    # Resolve the image source once for all steps in this batch
-    # Source A: product scan — real OBF image saved on scan_doc
-    # Source B: face/hair scan — category icon per step product name
-    obf_image = scan_doc.get("product_image_url") or None   # only set for product scans
+    # Source A: product scan OBF image (barcode scan)
+    obf_image = scan_doc.get("product_image_url") or None
+
+    # Source C: try to find a real product from the admin catalogue
+    # that targets the scan's detected conditions.
+    db_product: dict | None = None
+    if not obf_image:
+        try:
+            db_product = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: _pick_db_product(scan_doc)
+            )
+        except Exception as exc:
+            logger.warning("DB product lookup failed (non-fatal): %s", exc)
 
     saved: list[GeneratedStep] = []
     for step, desc in zip(steps, descriptions):
@@ -450,24 +494,35 @@ async def _insert_steps(
         bio     = str(step.get("bio",          "")).strip()[:300]
         reason  = str(step.get("reason",       "")).strip()[:200]
 
-        # Source A: one shared OBF image for all steps from this product scan.
-        # Source B: per-step category icon resolved from the product name keyword.
-        product_image_url = obf_image if obf_image else _category_icon(product)
+        # Resolve image URL with priority: Source A > Source C > Source B
+        if obf_image:
+            product_image_url = obf_image
+            recommended_product_id = None
+        elif db_product:
+            product_image_url = db_product["image_url"]
+            recommended_product_id = db_product["id"]
+            # Prefer the real product name when available
+            if db_product.get("name"):
+                product = db_product["name"][:120]
+        else:
+            product_image_url = _category_icon(product)
+            recommended_product_id = None
 
         doc = {
-            "user_id":           user_id,
-            "time_slot":         time_slot,
-            "title":             title,
-            "product_name":      product,
-            "bio":               bio,
-            "description":       desc.model_dump(),
-            "instructions":      bio,                  # backward-compat
-            "product_image_url": product_image_url,
-            "order":             next_order,
-            "completed_date":    None,
-            "created_at":        datetime.now(timezone.utc),
-            "ai_generated":      True,
-            "ai_reason":         reason,
+            "user_id":                  user_id,
+            "time_slot":                time_slot,
+            "title":                    title,
+            "product_name":             product,
+            "bio":                      bio,
+            "description":              desc.model_dump(),
+            "instructions":             bio,          # backward-compat
+            "product_image_url":        product_image_url,
+            "recommended_product_id":   recommended_product_id,
+            "order":                    next_order,
+            "completed_date":           None,
+            "created_at":               datetime.now(timezone.utc),
+            "ai_generated":             True,
+            "ai_reason":                reason,
         }
 
         result = await _steps_col().insert_one(doc)

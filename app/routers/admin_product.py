@@ -1,180 +1,303 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
-from typing import Optional
-from PIL import Image
+# app/routers/admin_product.py
+"""
+╔══════════════════════════════════════════════════════════════════╗
+║         SkinSense — Admin Product Management                    ║
+║                                                                  ║
+║  Endpoints:                                                      ║
+║   POST   /admin/product             Upload a new product        ║
+║   GET    /admin/product             List all products           ║
+║   GET    /admin/product/{id}        Get product by ID           ║
+║   PUT    /admin/product/{id}        Update product              ║
+║   DELETE /admin/product/{id}        Delete product              ║
+║                                                                  ║
+║  Schema (minimal, admin-friendly):                               ║
+║   - image      → uploaded to AWS S3, URL stored                 ║
+║   - name       → product display name                           ║
+║   - categories → list of product categories (CSV string)        ║
+║   - detected_conditions → skin/scalp conditions this product    ║
+║                           targets (CSV string)                  ║
+║   - id         → auto-generated MongoDB ObjectId (string)       ║
+║                                                                  ║
+║  Routine recommendation:                                         ║
+║   Products are matched to detected conditions from scan results  ║
+║   and surfaced by the AI routine generator via the              ║
+║   find_products_for_conditions() helper.                        ║
+╚══════════════════════════════════════════════════════════════════╝
+"""
+
+from __future__ import annotations
+
 import io
-from app.core.s3_client import upload_file_to_s3
+import uuid
+from datetime import datetime, timezone
+from typing import Annotated, List, Optional
+
+from bson import ObjectId
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from PIL import Image
+
 from app.core.mongo_client import products_collection
+from app.core.s3_client import delete_file_from_s3, upload_file_to_s3
 from app.routers.admin_auth import _get_current_admin
 
-router = APIRouter(prefix="/admin", tags=["Admin Upload"], dependencies=[Depends(_get_current_admin)])
+router = APIRouter(
+    prefix="/admin",
+    tags=["Admin Products"],
+    dependencies=[Depends(_get_current_admin)],
+)
 
 
-# =========================
-# HELPERS
-# =========================
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def normalize_id(raw_id: str) -> str:
-    return raw_id.strip().lower().replace(" ", "_")
-
-
-def clean_list(data: str):
-    return [x.strip().lower().replace(" ", "_") for x in data.split(",") if x]
+def _csv_to_list(data: str) -> list[str]:
+    """Convert a comma-separated string to a cleaned list of lowercase slugs."""
+    return [x.strip().lower().replace(" ", "_") for x in data.split(",") if x.strip()]
 
 
-async def upload_image(file: UploadFile, path: str) -> str:
-    try:
-        contents = await file.read()
-
-        # open image
-        image = Image.open(io.BytesIO(contents))
-
-        # convert to RGB (important for PNG/WebP issues)
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
-        # 🔥 resize to 240px width
-        base_width = 240
-        w_percent = base_width / float(image.size[0])
-        h_size = int((float(image.size[1]) * float(w_percent)))
-
-        image = image.resize((base_width, h_size), Image.LANCZOS)
-
-        # save to bytes
-        buffer = io.BytesIO()
-        image.save(buffer, format="JPEG", quality=85)
-        buffer.seek(0)
-
-        # upload to S3
-        url = await upload_file_to_s3(buffer.read(), path, "image/jpeg")
-        return url
-
-    except Exception as e:
-        print("UPLOAD ERROR:", e)
-        raise HTTPException(500, f"Image processing failed: {str(e)}")
-
-
-# =========================
-# PRODUCT API
-# =========================
-
-@router.post("/product")
-async def upload_product(
-    file: UploadFile = File(...),
-    id: str = Form(...),
-    name: str = Form(...),
-    category: str = Form(...),
-    tags: str = Form(...),
-    concerns: str = Form(...),
-    priority: int = Form(1)
-):
-    try:
-        # 🔥 validate image
-        if not file.content_type.startswith("image/"):
-            raise HTTPException(400, "Only image allowed")
-
-        # normalize
-        id = normalize_id(id)
-        tags_list = clean_list(tags)
-        concerns_list = clean_list(concerns)
-
-        # check duplicate
-        existing = products_collection.find_one({"id": id})
-        if existing:
-            raise HTTPException(400, "Product ID already exists")
-
-        # upload image
-        file_path = f"products/{id}.jpg"
-        public_url = await upload_image(file, file_path)
-
-        # insert into DB
-        products_collection.insert_one({
-            "id": id,
-            "name": name,
-            "image_url": public_url,
-            "category": category.lower(),
-            "tags": tags_list,          
-            "concerns": concerns_list,  
-            "priority": priority
-        })
-
-        return {
-            "message": "Product uploaded successfully",
-            "id": id,
-            "image_url": public_url
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-# ── PRODUCT CRUD (GET, PUT, DELETE) ───────────────────────────────────────────
-
-@router.get("/product")
-async def list_products():
-    cursor = products_collection.find({}).sort("priority", -1)
-    results = []
-    for doc in cursor:
-        doc["_id"] = str(doc["_id"])
-        results.append(doc)
-    return results
-
-
-@router.get("/product/{id}")
-async def get_product(id: str):
-    doc = products_collection.find_one({"id": id})
-    if not doc:
-        raise HTTPException(404, "Product not found")
-    doc["_id"] = str(doc["_id"])
+def _doc_to_response(doc: dict) -> dict:
+    """Serialize a MongoDB document for API response."""
+    doc["id"] = str(doc.pop("_id"))
     return doc
 
 
-@router.put("/product/{id}")
-async def update_product(
-    id: str,
-    file: UploadFile = File(None),
-    name: Optional[str] = Form(None, examples=[""]),
-    category: Optional[str] = Form(None, examples=[""]),
-    tags: Optional[str] = Form(None, examples=[""]),
-    concerns: Optional[str] = Form(None, examples=[""]),
-    priority: Optional[int] = Form(None)
+async def _process_and_upload_image(file: UploadFile, product_id: str) -> tuple[str, str]:
+    """
+    Validates, resizes (to 480px wide), converts to JPEG, and uploads to S3.
+    Returns (public_url, s3_key).
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Only image files are accepted.")
+
+    contents = await file.read()
+    try:
+        image = Image.open(io.BytesIO(contents))
+        if image.mode not in ("RGB", "RGBA"):
+            image = image.convert("RGB")
+        elif image.mode == "RGBA":
+            background = Image.new("RGB", image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[3])
+            image = background
+
+        base_width = 480
+        w_percent = base_width / float(image.size[0])
+        h_size = int(float(image.size[1]) * float(w_percent))
+        image = image.resize((base_width, h_size), Image.LANCZOS)
+
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=85)
+        buffer.seek(0)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Image processing failed: {exc}")
+
+    s3_key = f"products/{product_id}.jpg"
+    public_url = await upload_file_to_s3(buffer.read(), s3_key, "image/jpeg")
+    return public_url, s3_key
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@router.post("/product", status_code=201, summary="Upload Product")
+async def upload_product(
+    file: UploadFile = File(..., description="Product image (JPEG/PNG/WebP)"),
+    name: str = Form(..., description="Product display name"),
+    categories: str = Form(..., description="Comma-separated categories, e.g. 'Cleanser, Serum'"),
+    detected_conditions: str = Form(
+        ...,
+        description=(
+            "Comma-separated skin/scalp conditions this product targets, "
+            "e.g. 'acne, oiliness, dandruff'"
+        ),
+    ),
 ):
-    existing = products_collection.find_one({"id": id})
+    """
+    Upload a new product. The ID is auto-generated by the backend.
+    Image is resized to 480px wide and stored in AWS S3.
+    """
+    # Generate ID up-front so we can use it as the S3 key
+    product_id = str(ObjectId())
+
+    image_url, s3_key = await _process_and_upload_image(file, product_id)
+
+    categories_list = _csv_to_list(categories)
+    conditions_list = _csv_to_list(detected_conditions)
+
+    doc = {
+        "_id": ObjectId(product_id),
+        "name": name.strip(),
+        "image_url": image_url,
+        "s3_key": s3_key,
+        "categories": categories_list,
+        "detected_conditions": conditions_list,
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    products_collection.insert_one(doc)
+
+    return {
+        "success": True,
+        "message": "Product uploaded successfully.",
+        "id": product_id,
+        "image_url": image_url,
+        "name": name.strip(),
+        "categories": categories_list,
+        "detected_conditions": conditions_list,
+    }
+
+
+@router.get("/product", summary="List Products")
+async def list_products(
+    search: Optional[str] = Query(None, description="Search by name"),
+    condition: Optional[str] = Query(None, description="Filter by detected_condition slug"),
+    category: Optional[str] = Query(None, description="Filter by category slug"),
+    limit: int = Query(50, ge=1, le=200, description="Max results"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    """
+    Return a paginated list of products with optional search/filter.
+    """
+    query: dict = {}
+    if search:
+        query["name"] = {"$regex": search, "$options": "i"}
+    if condition:
+        query["detected_conditions"] = condition.lower().replace(" ", "_")
+    if category:
+        query["categories"] = category.lower().replace(" ", "_")
+
+    total = products_collection.count_documents(query)
+    cursor = (
+        products_collection.find(query)
+        .sort("created_at", -1)
+        .skip(offset)
+        .limit(limit)
+    )
+
+    items = [_doc_to_response(doc) for doc in cursor]
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "items": items,
+    }
+
+
+@router.get("/product/{product_id}", summary="Get Product")
+async def get_product(product_id: str):
+    """
+    Fetch a single product by its auto-generated ID.
+    """
+    try:
+        oid = ObjectId(product_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid product ID format.")
+
+    doc = products_collection.find_one({"_id": oid})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Product not found.")
+    return _doc_to_response(doc)
+
+
+@router.put("/product/{product_id}", summary="Update Product")
+async def update_product(
+    product_id: str,
+    file: Optional[UploadFile] = File(None, description="New product image (optional)"),
+    name: Optional[str] = Form(None, description="Updated product name"),
+    categories: Optional[str] = Form(None, description="Updated categories (CSV)"),
+    detected_conditions: Optional[str] = Form(None, description="Updated target conditions (CSV)"),
+):
+    """
+    Partially update a product. Only provided fields are changed.
+    If a new image is supplied the old S3 object is replaced.
+    """
+    try:
+        oid = ObjectId(product_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid product ID format.")
+
+    existing = products_collection.find_one({"_id": oid})
     if not existing:
-        raise HTTPException(404, "Product not found")
-        
-    updates = {}
+        raise HTTPException(status_code=404, detail="Product not found.")
+
+    updates: dict = {"updated_at": datetime.now(timezone.utc)}
+
     if name is not None:
-        updates["name"] = name
-    if category is not None:
-        updates["category"] = category.lower()
-    if tags is not None:
-        updates["tags"] = clean_list(tags)
-    if concerns is not None:
-        updates["concerns"] = clean_list(concerns)
-    if priority is not None:
-        updates["priority"] = priority
-        
-    if file:
-        if not file.content_type.startswith("image/"):
-            raise HTTPException(400, "Only image allowed")
-        file_path = f"products/{id}.jpg"
-        public_url = await upload_image(file, file_path)
-        updates["image_url"] = public_url
-        
-    if updates:
-        products_collection.update_one({"id": id}, {"$set": updates})
-        
-    res = products_collection.find_one({"id": id})
-    res["_id"] = str(res["_id"])
-    return {"message": "Product updated successfully", "data": res}
+        updates["name"] = name.strip()
+    if categories is not None:
+        updates["categories"] = _csv_to_list(categories)
+    if detected_conditions is not None:
+        updates["detected_conditions"] = _csv_to_list(detected_conditions)
+
+    if file and file.filename:
+        image_url, s3_key = await _process_and_upload_image(file, product_id)
+        updates["image_url"] = image_url
+        updates["s3_key"] = s3_key
+
+    products_collection.update_one({"_id": oid}, {"$set": updates})
+
+    doc = products_collection.find_one({"_id": oid})
+    return {
+        "success": True,
+        "message": "Product updated successfully.",
+        "data": _doc_to_response(doc),
+    }
 
 
-@router.delete("/product/{id}")
-async def delete_product(id: str):
-    existing = products_collection.find_one({"id": id})
-    if not existing:
-        raise HTTPException(404, "Product not found")
-    products_collection.delete_one({"id": id})
-    return {"message": "Product deleted successfully"}
+@router.delete("/product/{product_id}", summary="Delete Product")
+async def delete_product(product_id: str):
+    """
+    Delete a product and remove its image from S3.
+    """
+    try:
+        oid = ObjectId(product_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid product ID format.")
+
+    doc = products_collection.find_one({"_id": oid})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Product not found.")
+
+    # Remove image from S3
+    s3_key = doc.get("s3_key") or f"products/{product_id}.jpg"
+    try:
+        await delete_file_from_s3(s3_key)
+    except Exception as exc:
+        print(f"[WARN] S3 delete failed for {s3_key}: {exc}")
+
+    products_collection.delete_one({"_id": oid})
+    return {"success": True, "message": "Product deleted successfully."}
+
+
+# ── Public helper for the routine generator ───────────────────────────────────
+
+def find_products_for_conditions(
+    conditions: list[str],
+    limit: int = 5,
+) -> list[dict]:
+    """
+    Return up to `limit` products whose detected_conditions overlap
+    with the given list of condition slugs. Used by the AI routine generator
+    to surface real product recommendations.
+
+    Returns lightweight dicts with: id, name, image_url, categories,
+    detected_conditions.
+    """
+    if not conditions:
+        return []
+
+    normalised = [c.strip().lower().replace(" ", "_") for c in conditions if c]
+    cursor = products_collection.find(
+        {"detected_conditions": {"$in": normalised}},
+        {"name": 1, "image_url": 1, "categories": 1, "detected_conditions": 1},
+    ).limit(limit)
+
+    results = []
+    for doc in cursor:
+        results.append({
+            "id": str(doc["_id"]),
+            "name": doc.get("name", ""),
+            "image_url": doc.get("image_url", ""),
+            "categories": doc.get("categories", []),
+            "detected_conditions": doc.get("detected_conditions", []),
+        })
+    return results

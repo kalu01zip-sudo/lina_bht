@@ -28,7 +28,7 @@ from app.core.database import get_db
 from app.core.s3_client import upload_file_to_s3
 
 router = APIRouter(prefix="/articles", tags=["Article"])
-admin_router = APIRouter(prefix="/admin/articles", tags=["Admin Upload"])
+admin_router = APIRouter(prefix="/admin/articles", tags=["Admin Articles"])
 
 
 def articles_col():

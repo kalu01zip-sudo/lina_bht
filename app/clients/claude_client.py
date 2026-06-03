@@ -43,6 +43,18 @@ _ANTH_URL   = "https://api.anthropic.com/v1/messages"
 _ANTH_VER   = "2023-06-01"
 
 
+def get_active_anthropic_key_sync() -> str:
+    try:
+        from app.core.mongo_client import db
+        config = db["ai_config"].find_one({"_id": "current"})
+        if config and config.get("api_key"):
+            return config["api_key"]
+    except Exception:
+        pass
+    return os.environ.get("ANTHROPIC_API_KEY", "")
+
+
+
 # ── Public helper: vision availability ───────────────────────────────────────
 
 def is_vision_available() -> bool:
@@ -123,7 +135,7 @@ class ClaudeClient:
     """
 
     def __init__(self, api_key: str = "", timeout: int = 60):
-        self._api_key = api_key or _ANTH_KEY
+        self._api_key = api_key or get_active_anthropic_key_sync() or _ANTH_KEY
         self._timeout = timeout
 
     def text(self, system: str, user: str, max_tokens: int = 128) -> str:
@@ -249,7 +261,8 @@ async def _anthropic_vision_async(
     system: str, content_blocks: list[dict], max_tokens: int
 ) -> str:
     import anthropic
-    client  = anthropic.AsyncAnthropic(api_key=_ANTH_KEY)
+    key = get_active_anthropic_key_sync() or _ANTH_KEY
+    client  = anthropic.AsyncAnthropic(api_key=key)
     message = await client.messages.create(
         model=_ANTH_MODEL, max_tokens=max_tokens, system=system,
         messages=[{"role": "user", "content": content_blocks}],
@@ -296,7 +309,8 @@ async def _anthropic_stream(
     system: str, messages: list[dict], max_tokens: int
 ) -> AsyncGenerator[str, None]:
     import anthropic
-    client = anthropic.AsyncAnthropic(api_key=_ANTH_KEY)
+    key = get_active_anthropic_key_sync() or _ANTH_KEY
+    client = anthropic.AsyncAnthropic(api_key=key)
     async with client.messages.stream(
         model=_ANTH_MODEL, max_tokens=max_tokens, system=system, messages=messages
     ) as stream:
