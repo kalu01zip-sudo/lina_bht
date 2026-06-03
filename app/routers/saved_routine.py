@@ -168,6 +168,10 @@ async def save_routine(
 
         saved_routines_collection.insert_many(rows)
 
+        for row in rows:
+            if "_id" in row:
+                row["_id"] = str(row["_id"])
+
         return {
             "success": True,
             "saved_count": len(rows),
