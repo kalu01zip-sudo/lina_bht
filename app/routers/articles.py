@@ -288,9 +288,7 @@ async def update_article(
     read_time: Optional[str] = Form(None, examples=[""]),
     content: Optional[str] = Form(None, examples=[""]),
     image_file: UploadFile = File(None),
-    video_file: UploadFile = File(None),
-    image_url: Optional[str] = Form(None, examples=[""]),
-    video_url: Optional[str] = Form(None, examples=[""])
+    video_file: UploadFile = File(None)
 ):
     """
     Update article fields or re-upload files.
@@ -323,8 +321,6 @@ async def update_article(
             ext = ".png"
         file_path = f"articles/{article_id}_cover{ext}"
         updates["image_url"] = await upload_file_to_s3_helper("assets", image_file, file_path)
-    elif image_url is not None:
-        updates["image_url"] = image_url
 
     # Handle video upload
     if video_file:
@@ -333,8 +329,6 @@ async def update_article(
             ext = ".mp4"
         file_path = f"articles/{article_id}_video{ext}"
         updates["video_url"] = await upload_file_to_s3_helper("routine-videos", video_file, file_path)
-    elif video_url is not None:
-        updates["video_url"] = video_url
 
     if updates:
         await articles_col().update_one({"_id": oid}, {"$set": updates})
