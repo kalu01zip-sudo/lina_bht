@@ -134,6 +134,8 @@ async def scalp_history(
     data = get_scalp_scan_history(user_id, limit=limit, offset=offset)
     return {
         "total": total,
+        "limit": limit,
+        "offset": offset,
         "scans": data
     }
 

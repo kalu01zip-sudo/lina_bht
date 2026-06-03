@@ -407,6 +407,8 @@ async def get_product_history(
 
         return {
             "total": total,
+            "limit": limit,
+            "offset": offset,
             "history": result
         }
 

@@ -80,7 +80,11 @@ def run_tests():
     reset_db_client()
     response = client.get("/articles")
     assert response.status_code == 200
-    user_list = response.json()
+    user_body = response.json()
+    user_list = user_body["articles"]
+    assert user_body["total"] >= 1
+    assert user_body["limit"] == 50
+    assert user_body["offset"] == 0
     assert len(user_list) >= 1
     found_user = next((a for a in user_list if a["id"] == article_id), None)
     assert found_user is not None
@@ -92,7 +96,8 @@ def run_tests():
     reset_db_client()
     response = client.get("/articles?category=Skin Health")
     assert response.status_code == 200
-    cat_list = response.json()
+    cat_body = response.json()
+    cat_list = cat_body["articles"]
     assert len(cat_list) >= 1
     assert all(a["category"] == "Skin Health" for a in cat_list)
     print("[PASS] GET /articles: Category filter returned matching entries")
@@ -101,7 +106,8 @@ def run_tests():
     reset_db_client()
     response = client.get("/articles?search=barrier")
     assert response.status_code == 200
-    search_list = response.json()
+    search_body = response.json()
+    search_list = search_body["articles"]
     assert len(search_list) >= 1
     assert any(a["id"] == article_id for a in search_list)
     print("[PASS] GET /articles: Search query works correctly")
@@ -124,13 +130,19 @@ def run_tests():
     reset_db_client()
     response = client.get("/articles?limit=1")
     assert response.status_code == 200
-    limit_list = response.json()
+    limit_body = response.json()
+    limit_list = limit_body["articles"]
+    assert limit_body["limit"] == 1
+    assert limit_body["offset"] == 0
     assert len(limit_list) == 1
 
     reset_db_client()
     response = client.get("/articles?limit=1&offset=1")
     assert response.status_code == 200
-    offset_list = response.json()
+    offset_body = response.json()
+    offset_list = offset_body["articles"]
+    assert offset_body["limit"] == 1
+    assert offset_body["offset"] == 1
     assert len(offset_list) == 1
     assert offset_list[0]["id"] != limit_list[0]["id"]
 

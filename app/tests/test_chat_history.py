@@ -74,7 +74,11 @@ async def run_tests_async():
         # 4. Fetch with limit=10, offset=0 (Expect Messages 51 to 60)
         res_offset_0 = await client.get("/chat/history?limit=10&offset=0", headers=headers)
         assert res_offset_0.status_code == 200, f"Failed to get history with offset 0: {res_offset_0.text}"
-        history_0 = res_offset_0.json()["messages"]
+        body_0 = res_offset_0.json()
+        history_0 = body_0["messages"]
+        assert body_0["total"] == 60
+        assert body_0["limit"] == 10
+        assert body_0["offset"] == 0
         assert len(history_0) == 10, f"Expected 10 messages, got {len(history_0)}"
         assert history_0[0]["content"] == "Message 51"
         assert history_0[-1]["content"] == "Message 60"
@@ -83,7 +87,11 @@ async def run_tests_async():
         # 5. Fetch with limit=10, offset=10 (Expect Messages 41 to 50)
         res_offset_10 = await client.get("/chat/history?limit=10&offset=10", headers=headers)
         assert res_offset_10.status_code == 200, f"Failed to get history with offset 10: {res_offset_10.text}"
-        history_10 = res_offset_10.json()["messages"]
+        body_10 = res_offset_10.json()
+        history_10 = body_10["messages"]
+        assert body_10["total"] == 60
+        assert body_10["limit"] == 10
+        assert body_10["offset"] == 10
         assert len(history_10) == 10
         assert history_10[0]["content"] == "Message 41"
         assert history_10[-1]["content"] == "Message 50"
@@ -92,7 +100,11 @@ async def run_tests_async():
         # 6. Fetch with limit=50, offset=50 (Expect Messages 01 to 10)
         res_offset_50 = await client.get("/chat/history?limit=50&offset=50", headers=headers)
         assert res_offset_50.status_code == 200, f"Failed to get history with offset 50: {res_offset_50.text}"
-        history_50 = res_offset_50.json()["messages"]
+        body_50 = res_offset_50.json()
+        history_50 = body_50["messages"]
+        assert body_50["total"] == 60
+        assert body_50["limit"] == 50
+        assert body_50["offset"] == 50
         assert len(history_50) == 10
         assert history_50[0]["content"] == "Message 01"
         assert history_50[-1]["content"] == "Message 10"

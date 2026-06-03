@@ -100,6 +100,9 @@ class ChatMessage(BaseModel):
 
 
 class ChatHistoryResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
     messages: list[ChatMessage]
 
 
@@ -1257,6 +1260,7 @@ async def get_history(
     user_id: str = Depends(_get_current_user_id),
 ):
     db = get_db()
+    total = await db.chat_messages.count_documents({"user_id": user_id})
     cursor = (
         db.chat_messages
         .find({"user_id": user_id})
@@ -1275,7 +1279,12 @@ async def get_history(
         )
         for d in docs
     ]
-    return ChatHistoryResponse(messages=messages)
+    return ChatHistoryResponse(
+        total=total,
+        limit=limit,
+        offset=offset,
+        messages=messages
+    )
 
 
 @router.delete("/history", summary="Clear chat history")

@@ -82,6 +82,8 @@ def run_tests():
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["total"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 1
     assert len(body["scans"]) == 2
     
     # --- Test GET /scan/scalp/history pagination ---
@@ -90,6 +92,8 @@ def run_tests():
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["total"] == 3
+    assert body["limit"] == 1
+    assert body["offset"] == 1
     assert len(body["scans"]) == 1
 
     # --- Test GET /scan/product/history pagination ---
@@ -98,6 +102,8 @@ def run_tests():
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["total"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 1
     assert len(body["history"]) == 2
 
     # --- Test GET /routine/all pagination ---
@@ -106,6 +112,8 @@ def run_tests():
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["total"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 1
     assert len(body["data"]) == 2
 
     # --- Test GET /lia/notifications pagination ---
@@ -114,6 +122,8 @@ def run_tests():
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["total"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 1
     assert len(body["notifications"]) == 2
 
     print("[SUCCESS] All pagination validation tests passed successfully!")

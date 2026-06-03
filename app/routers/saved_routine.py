@@ -346,6 +346,8 @@ async def get_all_saved_routines(
         return {
             "success": True,
             "total": total,
+            "limit": limit,
+            "offset": offset,
             "count": len(data),
             "data": data
         }

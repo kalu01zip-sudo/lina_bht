@@ -52,6 +52,13 @@ class ArticleListResponse(BaseModel):
     created_at: str
 
 
+class ArticleListPageResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    articles: List[ArticleListResponse]
+
+
 class ArticleDetailResponse(BaseModel):
     id: str
     title: str
@@ -105,7 +112,7 @@ def _fmt_article(doc: dict) -> dict:
 #  USER-SIDE ENDPOINTS (tags=["Article"])
 # ══════════════════════════════════════════════════════════════════════════════
 
-@router.get("", response_model=List[ArticleListResponse])
+@router.get("", response_model=ArticleListPageResponse)
 async def list_articles(
     current_user: CurrentUser,
     search: Optional[str] = Query(None, description="Search term in title, description, or content"),
@@ -137,6 +144,7 @@ async def list_articles(
     if recommended:
         sort_opts = [("views", -1), ("created_at", -1)]
 
+    total = await articles_col().count_documents(query)
     cursor = articles_col().find(query, projection={"content": False})
     cursor.sort(sort_opts).skip(offset).limit(limit)
 
@@ -144,7 +152,12 @@ async def list_articles(
     async for doc in cursor:
         articles.append(_fmt_article(doc))
 
-    return articles
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "articles": articles
+    }
 
 
 @router.get("/categories", response_model=List[str])

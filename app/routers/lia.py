@@ -73,6 +73,8 @@ async def get_notifications(
     return {
         "success": True,
         "total": total,
+        "limit": limit,
+        "offset": offset,
         "count": len(notifications),
         "notifications": notifications,
     }
