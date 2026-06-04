@@ -1,3 +1,6 @@
+import asyncio
+import logging
+
 from app.core.mongo_client import saved_routines_collection
 
 from app.services.generate_manual_routine_ai import (
@@ -24,6 +27,14 @@ from app.services.routine_draft_service import (
     new_routine_id,
     register_product_routine_drafts
 )
+
+from app.utils.routine_cache import get_cached_routine, set_cached_routine
+from app.utils.saved_routine_filter import (
+    get_existing_categories,
+    filter_steps_against_saved,
+)
+
+logger = logging.getLogger(__name__)
 
 
 VALID_TIMES = {
@@ -458,6 +469,16 @@ async def generate_manual_ai_routine_draft(
     user_profile: dict
 ):
 
+    # ── Cache check ─────────────────────────────────────────────────────
+    cache_key_time = time or "any"
+    cached = get_cached_routine("manual_ai", user_id, product_name, cache_key_time)
+    if cached:
+        logger.info(
+            "Manual AI routine cache hit — user=%s product=%s time=%s",
+            user_id, product_name, cache_key_time,
+        )
+        return cached
+
     manual_product = build_manual_product(
 
         product_name=product_name,
@@ -467,27 +488,31 @@ async def generate_manual_ai_routine_draft(
         time=time
     )
 
-    scans = get_scan_history(
-        user_id=user_id,
-        limit=1
+    # ── Parallel DB fetches ─────────────────────────────────────────────
+    loop = asyncio.get_event_loop()
+    scans, existing_routines, existing_categories = await asyncio.gather(
+        loop.run_in_executor(None, lambda: get_scan_history(user_id=user_id, limit=1)),
+        loop.run_in_executor(None, lambda: get_saved_routines(user_id)),
+        loop.run_in_executor(None, lambda: get_existing_categories(user_id)),
     )
-
-    latest_face_scan = (
-        scans[0]
-        if scans
-        else None
-    )
-
-    existing_routines = get_saved_routines(
-        user_id
-    )
+    latest_face_scan = scans[0] if scans else None
 
     routine = await generate_manual_routine_ai(
         manual_product=manual_product,
         user_profile=user_profile,
         latest_face_scan=latest_face_scan,
-        existing_routines=existing_routines
+        existing_routines=existing_routines,
+        existing_categories=existing_categories,
     )
+
+    # Post-filter: remove steps whose category is already saved
+    if routine.get("routine") and routine["routine"].get("steps"):
+        time_slot = routine["routine"].get("time", time or "morning")
+        routine["routine"]["steps"] = filter_steps_against_saved(
+            routine["routine"]["steps"],
+            time_slot,
+            existing_categories,
+        )
 
     routine = inject_products(
         routine_data=routine,
@@ -502,11 +527,16 @@ async def generate_manual_ai_routine_draft(
         scan_id="manual_ai"
     )
 
-    return {
+    response_data = {
         "saved": False,
         "routine_step_id": [
             draft["routine_id"]
             for draft in drafts
         ],
-        "routine": routine
+        "routine": routine,
     }
+
+    # ── Store in cache ──────────────────────────────────────────────────
+    set_cached_routine("manual_ai", user_id, product_name, cache_key_time, response_data)
+
+    return response_data

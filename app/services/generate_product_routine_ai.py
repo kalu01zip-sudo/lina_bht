@@ -1,58 +1,45 @@
-from anthropic import Anthropic
+"""
+app/services/generate_product_routine_ai.py
+─────────────────────────────────────────────
+Async AI routine generator for product scans.
+Uses AsyncAnthropic so the event loop is never blocked.
+"""
 
-import os
 import json
+import logging
+import os
+import re
 
-from app.utils.json_serializer import (
-    serialize_mongo
-)
+from anthropic import AsyncAnthropic
 
+from app.utils.json_serializer import serialize_mongo
 
-client = Anthropic(
-    api_key=os.getenv("ANTHROPIC_API_KEY")
-)
+logger = logging.getLogger(__name__)
 
-
-# ==========================================
-# SAFE JSON EXTRACTOR
-# ==========================================
-
-def extract_json(text: str):
-
-    import re
-
-    match = re.search(
-
-        r'\{.*\}',
-
-        text,
-
-        re.DOTALL
-    )
-
-    if not match:
-
-        return None
-
-    candidate = match.group(0)
-
-    parsed = json.loads(candidate)
-
-    return parsed
+_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 
-# ==========================================
-# GENERATE PRODUCT ROUTINE
-# ==========================================
+def _extract_json(text: str) -> dict | None:
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    return json.loads(match.group(0)) if match else None
+
+
+def _fmt_existing(existing: dict[str, list[str]]) -> str:
+    parts = []
+    for slot, cats in existing.items():
+        if cats:
+            parts.append(f"  {slot}: {', '.join(cats)}")
+    return "\n".join(parts) if parts else "  (none)"
+
 
 async def generate_product_routine_ai(
-
     product_scan: dict,
-
     latest_face_scan: dict,
-
-    existing_routines: list
-):
+    existing_routines: list,
+    existing_categories: dict[str, list[str]] | None = None,
+) -> dict:
+    existing_categories = existing_categories or {}
+    existing_block = _fmt_existing(existing_categories)
 
     system_prompt = """
 You are a skincare routine integration AI.
@@ -64,33 +51,22 @@ STRICT RULES:
 - Avoid duplicate product usage
 - Keep routine realistic
 - Do not over-layer active ingredients
+
+DUPLICATE RULES (critical):
+- Do NOT recommend any category already listed under ALREADY IN ROUTINE.
+- Each step in the returned routine must have a unique category.
 """
 
     user_prompt = (
         "Integrate this scanned skincare product into user's routine.\n\n"
-
         "SCANNED PRODUCT:\n"
-        + json.dumps(
-            serialize_mongo(product_scan),
-            indent=2
-        )
-
+        + json.dumps(serialize_mongo(product_scan), indent=2)
         + "\n\nLATEST FACE SCAN:\n"
-
-        + json.dumps(
-            serialize_mongo(latest_face_scan),
-            indent=2
-        )
-
+        + json.dumps(serialize_mongo(latest_face_scan), indent=2)
         + "\n\nCURRENT SAVED ROUTINES:\n"
-
-        + json.dumps(
-            serialize_mongo(existing_routines),
-            indent=2
-        )
-
+        + json.dumps(serialize_mongo(existing_routines), indent=2)
+        + f"\n\nALREADY IN ROUTINE (do NOT recommend these again):\n{existing_block}\n"
         + """
-
     TASKS:
     1. Decide if product belongs:
     - morning
@@ -106,15 +82,13 @@ STRICT RULES:
 
     4. Avoid duplicate product layering
 
-    5. Suggest complementary product categories ONLY
+    5. Suggest complementary product categories ONLY — skip any in ALREADY IN ROUTINE
 
     Return ONLY this JSON:
 
     {
     "why": [
-
         "2-5 word point",
-
         "2-5 word point"
     ],
 
@@ -146,52 +120,21 @@ STRICT RULES:
     """
     )
 
-    response = client.messages.create(
-
+    response = await _client.messages.create(
         model="claude-haiku-4-5",
-
         max_tokens=1000,
-
         temperature=0,
-
         system=system_prompt,
-
-        messages=[
-            {
-                "role": "user",
-                "content": user_prompt
-            }
-        ]
+        messages=[{"role": "user", "content": user_prompt}],
     )
 
-    raw_text = ""
+    raw_text = "".join(
+        block.text for block in response.content if hasattr(block, "text")
+    )
 
-    for block in response.content:
+    parsed = _extract_json(raw_text)
+    if not parsed:
+        logger.error("Product routine AI returned unparseable JSON: %s", raw_text[:300])
+        raise ValueError("No JSON object returned from product routine AI")
 
-        if hasattr(block, "text"):
-
-            raw_text += block.text
-
-    try:
-
-        parsed = extract_json(raw_text)
-
-        if not parsed:
-
-            raise ValueError(
-                "No JSON object returned"
-            )
-
-        return parsed
-
-    except Exception as e:
-
-        print(
-            "RAW PRODUCT ROUTINE RESPONSE:"
-        )
-
-        print(raw_text)
-
-        raise Exception(
-            f"Routine JSON failed: {str(e)}"
-        )
+    return parsed
