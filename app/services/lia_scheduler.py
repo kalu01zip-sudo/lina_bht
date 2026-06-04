@@ -26,10 +26,12 @@ from app.services.lia_coaching_engine import (
     trigger_morning_routine,
     trigger_evening_routine,
     trigger_weekly_progress,
+    trigger_stress_check_in,
     trigger_inactivity_nudge,
     trigger_hydration_reminder,
     trigger_streak_celebration,
 )
+from app.services.admin_notification_settings import get_notification_settings
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +203,30 @@ async def run_weekly_progress():
     logger.info("[Lia Scheduler] Weekly progress job complete.")
 
 
+async def run_stress_check_in():
+    """Weekly wellness check-in."""
+    logger.info("[Lia Scheduler] Running stress check-ins...")
+
+    users = await _get_all_active_users()
+
+    for user in users:
+        try:
+            user_id = str(user["_id"])
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                trigger_stress_check_in,
+                user_id, user,
+            )
+
+        except Exception as exc:
+            logger.warning(
+                "[Lia] Stress check-in failed for %s: %s",
+                str(user["_id"])[:8], exc,
+            )
+
+    logger.info("[Lia Scheduler] Stress check-in job complete.")
+
+
 async def run_periodic_checks():
     """Every 6 hours — inactivity, hydration, streaks."""
     logger.info("[Lia Scheduler] Running periodic checks...")
@@ -271,38 +297,60 @@ async def run_daily_routine_reset():
 #  SCHEDULER LIFECYCLE
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _parse_hhmm(value: str) -> tuple[int, int]:
+    try:
+        hour, minute = [int(part) for part in value.split(":", 1)]
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+    except Exception:
+        pass
+    return 8, 0
+
+
+def _schedule_reminder_job(scheduler: AsyncIOScheduler, reminder: dict):
+    if not reminder.get("enabled", False):
+        return
+
+    runners = {
+        "morning_routine": run_morning_routine,
+        "night_routine": run_evening_routine,
+        "weekly_scan_reminder": run_weekly_progress,
+        "stress_check_in": run_stress_check_in,
+    }
+    runner = runners.get(reminder.get("id"))
+    if not runner:
+        logger.warning(
+            "[Lia Scheduler] No runner mapped for reminder %s",
+            reminder.get("id"),
+        )
+        return
+
+    schedule = reminder.get("schedule") or {}
+    hour, minute = _parse_hhmm(schedule.get("time", "08:00"))
+    cron_args = {"hour": hour, "minute": minute}
+    if schedule.get("type") == "weekly":
+        cron_args["day_of_week"] = schedule.get("day_of_week") or "sun"
+
+    scheduler.add_job(
+        runner,
+        CronTrigger(**cron_args),
+        id=f"lia_{reminder['id']}",
+        name=f"Lia {reminder.get('title', reminder['id'])}",
+        replace_existing=True,
+    )
+
+
 def start_scheduler():
     """Start the Lia notification scheduler."""
     global _scheduler
 
+    if _scheduler:
+        stop_scheduler()
+
     _scheduler = AsyncIOScheduler()
-
-    # Morning routine — 8:00 AM
-    _scheduler.add_job(
-        run_morning_routine,
-        CronTrigger(hour=8, minute=0),
-        id="lia_morning",
-        name="Lia Morning Routine",
-        replace_existing=True,
-    )
-
-    # Evening routine — 9:00 PM
-    _scheduler.add_job(
-        run_evening_routine,
-        CronTrigger(hour=21, minute=0),
-        id="lia_evening",
-        name="Lia Evening Routine",
-        replace_existing=True,
-    )
-
-    # Weekly progress — Sunday 10:00 AM
-    _scheduler.add_job(
-        run_weekly_progress,
-        CronTrigger(day_of_week="sun", hour=10, minute=0),
-        id="lia_weekly",
-        name="Lia Weekly Progress",
-        replace_existing=True,
-    )
+    settings = get_notification_settings()
+    for reminder in settings["reminders"]:
+        _schedule_reminder_job(_scheduler, reminder)
 
     # Periodic checks — every 6 hours
     _scheduler.add_job(
@@ -323,9 +371,10 @@ def start_scheduler():
     )
 
     _scheduler.start()
+    job_count = len(_scheduler.get_jobs())
     logger.info(
-        "[Lia Scheduler] Started with 5 jobs: "
-        "morning(8AM), evening(9PM), weekly(Sun 10AM), periodic(6h), daily-reset(midnight)"
+        "[Lia Scheduler] Started with %d jobs from admin notification settings.",
+        job_count,
     )
 
 

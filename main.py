@@ -31,6 +31,7 @@ from app.routers.admin_home         import router as admin_home_router
 # from app.routers.admin_products      import router as admin_products_router      
 from app.routers.admin_subscription  import router as admin_subscription_router  
 from app.routers.admin_analytics import router as admin_analytics_router
+from app.routers.admin_notification import router as admin_notification_router
 from app.routers.admin_limits    import router as admin_limits_router
 from app.routers import onboarding
 from app.routers import admin, scan
@@ -148,6 +149,7 @@ app.include_router(admin_home_router)
 # app.include_router(admin_products_router)      
 app.include_router(admin_subscription_router)  
 app.include_router(admin_analytics_router)
+app.include_router(admin_notification_router)
 app.include_router(admin_limits_router)
 
 

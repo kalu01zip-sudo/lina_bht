@@ -73,6 +73,9 @@ def routine_videos_col():
 def lia_notifications_col():
     return get_db()["lia_notifications"]
 
+def admin_notification_settings_col():
+    return get_db()["admin_notification_settings"]
+
 def legal_contents_col():
     return get_db()["legal_contents"]
 
@@ -160,6 +163,8 @@ async def create_indexes():
         await db.routine_videos.create_index([("phase", ASCENDING), ("product_category", ASCENDING)])
         await db.lia_notifications.create_index("user_id")
         await db.lia_notifications.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+        await db.lia_notifications.create_index([("trigger", ASCENDING), ("created_at", DESCENDING)])
+        await db.admin_notification_settings.create_index("updated_at")
         await db.legal_contents.create_index("id", unique=True)
 
         print("[OK] MongoDB indexes created.")

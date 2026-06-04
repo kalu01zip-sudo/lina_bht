@@ -503,6 +503,38 @@ def trigger_streak_celebration(
     )
 
 
+# ==========================================================================
+#  TRIGGER: STRESS CHECK-IN
+# ==========================================================================
+
+def trigger_stress_check_in(
+    user_id: str,
+    user_doc: dict,
+):
+    """Send a weekly wellness check-in message."""
+    if has_recent_notification(user_id, "stress_check_in", hours=168):
+        return
+
+    context = (
+        "Weekly wellness check-in. Ask the user to notice stress, sleep, "
+        "hydration, and routine consistency because those can affect skin.\n"
+    )
+    context += _format_profile_context(user_doc)
+
+    title, message = _generate_coaching_message(
+        "stress_check_in", context
+    )
+
+    _deliver_notification(
+        user_id=user_id,
+        user_doc=user_doc,
+        trigger="stress_check_in",
+        title=title,
+        message=message,
+        data={"source": "admin_notification_settings"},
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  TRIGGER: NEW USER WELCOME
 # ══════════════════════════════════════════════════════════════════════════════
