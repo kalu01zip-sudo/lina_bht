@@ -1,11 +1,11 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Body
 from pydantic import (
     BaseModel,
     Field
 )
-from typing import List
+from typing import List, Optional
 
 from app.core.mongo_client import (
     saved_routines_collection
@@ -96,6 +96,11 @@ class SaveRoutineRequest(
         ...,
         min_length=1
     )
+
+
+class StepCompleteRequest(BaseModel):
+    is_completed: Optional[bool] = None
+
 
 
 # =========================
@@ -200,7 +205,8 @@ async def save_routine(
 @router.patch("/step/{step_id}/complete")
 async def mark_step_complete(
     step_id: str,
-    current_user: CurrentUser
+    current_user: CurrentUser,
+    body: Optional[StepCompleteRequest] = Body(None)
 ):
 
     try:
@@ -221,14 +227,25 @@ async def mark_step_complete(
                 detail="Routine step not found or does not belong to this user"
             )
 
-        completed_at = datetime.now(
-            timezone.utc
-        ).isoformat()
+        currently_completed = existing_step.get("is_completed", False)
+        
+        # If is_completed is explicitly provided in body, use it. Otherwise, toggle.
+        if body is not None and body.is_completed is not None:
+            new_completed = body.is_completed
+        else:
+            new_completed = not currently_completed
+
+        if new_completed:
+            completed_at = datetime.now(
+                timezone.utc
+            ).isoformat()
+        else:
+            completed_at = None
 
         saved_routines_collection.update_one(
             {"id": step_id, "user_id": user_id},
             {"$set": {
-                "is_completed": True,
+                "is_completed": new_completed,
                 "completed_at": completed_at
             }}
         )
@@ -241,7 +258,7 @@ async def mark_step_complete(
         return {
             "success": True,
             "step_id": step_id,
-            "is_completed": True,
+            "is_completed": new_completed,
             "completed_at": completed_at,
             "data": updated_step
         }
@@ -256,8 +273,9 @@ async def mark_step_complete(
 
         raise HTTPException(
             status_code=500,
-            detail="Failed to mark routine step complete"
+            detail="Failed to update routine step completion"
         )
+
 
 
 # =========================
