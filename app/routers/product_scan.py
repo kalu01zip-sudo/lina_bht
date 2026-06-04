@@ -24,6 +24,9 @@ from app.services.product_scan_history import (
 from app.services.product_catalog_service import (
     create_product_if_missing
 )
+from bson import ObjectId
+from app.services.image_storage import upload_scan_image
+
 
 
 router = APIRouter(
@@ -86,53 +89,19 @@ async def scan_product(
         )
 
         # ==================================
-        # SAVE PRODUCT TO CATALOG (MongoDB & S3)
+        # SAVE PRODUCT TO CATALOG (Skipped for /scan/product)
         # ==================================
 
-        catalog_product = create_product_if_missing(
+        # We deliberately skip saving the product to the catalog/database for this endpoint.
+        # The scan result will still be stored in the scan history.
 
-            extracted_product={
-
-                "product_name":
-                    ai_result["product"].get(
-                        "name"
-                    ),
-
-                "brand":
-                    ai_result["product"].get(
-                        "brand"
-                    ),
-
-                "category":
-                    ai_result["product"].get(
-                        "category"
-                    ),
-
-                "ingredients":
-                    ai_result.get(
-                        "detected_ingredients",
-                        []
-                    )
-            },
-
-            image_bytes=image_bytes
-        )
-
-        image_url = catalog_product.get(
-            "image_url"
-        )
+        catalog_product = None
+        image_url = None
 
         product_payload = {
-
             **ai_result["product"],
-
-            "id":
-                catalog_product.get(
-                    "id"
-                ),
-
-            "image_url":
-                image_url
+            "id": None,
+            "image_url": None,
         }
 
         # ==================================
