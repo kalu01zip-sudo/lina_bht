@@ -55,7 +55,16 @@ def _fetch_last_scans(user_id: str) -> tuple[dict | None, dict | None]:
 def _fetch_routine_summary(user_id: str) -> dict:
     cursor = saved_routines_collection.find(
         {"user_id": user_id},
-        {"id": 1, "time": 1, "product_name": 1, "is_completed": 1, "completed_at": 1, "_id": 0}
+        {
+            "id": 1,
+            "time": 1,
+            "product_category": 1,
+            "product_name": 1,
+            "product_url": 1,
+            "is_completed": 1,
+            "completed_at": 1,
+            "_id": 0,
+        },
     ).sort("time", 1)
 
     rows = list(cursor)
@@ -67,8 +76,12 @@ def _fetch_routine_summary(user_id: str) -> dict:
         "completed": sum(1 for row in rows if row.get("is_completed")),
         "data": [
             {
+                "id": row.get("id"),
                 "time": row.get("time"),
+                "product_category": row.get("product_category"),
                 "product_name": row.get("product_name"),
+                "product_url": row.get("product_url"),
+                "is_completed": row.get("is_completed"),
             }
             for row in rows
         ],
