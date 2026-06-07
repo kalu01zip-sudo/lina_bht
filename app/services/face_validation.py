@@ -1,10 +1,7 @@
 import cv2
 import numpy as np
 from fastapi import HTTPException
-# Load face detector
-face_cascade = cv2.CascadeClassifier(
-    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-)
+from app.utils.face_detection_utils import detect_all_faces
 
 
 def read_image(file_bytes: bytes):
@@ -35,10 +32,7 @@ def resize_image(image, max_width=800):
 
 
 def check_face(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(
-        gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
-    )
+    faces = detect_all_faces(image)
 
     if len(faces) == 0:
         return "no_face"
