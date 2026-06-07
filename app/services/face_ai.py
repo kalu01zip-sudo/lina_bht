@@ -30,6 +30,30 @@ def extract_json(text: str) -> str | None:
     return None
 
 
+def _parse_regions(raw_regions: list) -> list[dict] | None:
+    """Parse and validate normalised region coordinates from Claude's JSON response."""
+    if not raw_regions or not isinstance(raw_regions, list):
+        return None
+    regions = []
+    for r in raw_regions:
+        if not isinstance(r, dict):
+            continue
+        try:
+            x = float(r.get("x", 0.0))
+            y = float(r.get("y", 0.0))
+            w = float(r.get("width", 0.0))
+            h = float(r.get("height", 0.0))
+            # Validate ranges
+            if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 and 0.0 <= w <= 1.0 and 0.0 <= h <= 1.0):
+                continue
+            if w < 0.01 or h < 0.01:
+                continue
+            regions.append({"x": x, "y": y, "width": w, "height": h})
+        except (TypeError, ValueError):
+            continue
+    return regions if regions else None
+
+
 # ── Scoring constants ─────────────────────────────────────────────────────────
 
 # Maps (condition_name, severity) → positive penalty deducted from baseline 95
@@ -192,6 +216,16 @@ LIFESTYLE FACTORS
 • stress_score:   100 = extreme stress signs visible (inflammation, breakouts)
 • water_intake:   100 = excellent hydration visible
 • sleep_quality:  100 = well-rested skin visible (no puffiness, no dark circles)
+
+════════════════════════════════════════════════════
+REGION COORDINATE RULES
+════════════════════════════════════════════════════
+• x, y = top-left corner of the bounding box, normalised 0.0–1.0.
+• width, height = size of the bounding box, normalised 0.0–1.0.
+• Coordinates are relative to the FIRST image provided (Face image 1).
+• Return at least 1 region per detected condition if the area is localisable.
+• For diffuse conditions (redness, oiliness, uneven skin tone, dullness), return larger boxes.
+• If a condition is not localisable, return an empty regions array [].
 """
 
     # ── User prompt ───────────────────────────────────────────────────────────
@@ -221,7 +255,10 @@ STEP 4 — OUTPUT only this JSON (replace placeholder values):
   "visible_area": {
     "condition": "<one of: acne|pimple|redness|irritation|pigmentation|dullness>",
     "areas": ["<one or more of: cheeks|nose|forehead|chin|under_eye>"],
-    "score": <health_score>
+    "score": <health_score>,
+    "regions": [
+      { "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }
+    ]
   },
 
   "hydration": <0-100>,
@@ -230,17 +267,26 @@ STEP 4 — OUTPUT only this JSON (replace placeholder values):
     {
       "name": "<condition_name_from_allowed_list>",
       "note": "<exactly 10-12 word clinical note>",
-      "severity": "<Mild|Moderate|Severe>"
+      "severity": "<Mild|Moderate|Severe>",
+      "regions": [
+        { "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }
+      ]
     },
     {
       "name": "<condition_name_from_allowed_list>",
       "note": "<exactly 10-12 word clinical note>",
-      "severity": "<Mild|Moderate|Severe>"
+      "severity": "<Mild|Moderate|Severe>",
+      "regions": [
+        { "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }
+      ]
     },
     {
       "name": "<condition_name_from_allowed_list>",
       "note": "<exactly 10-12 word clinical note>",
-      "severity": "<Mild|Moderate|Severe>"
+      "severity": "<Mild|Moderate|Severe>",
+      "regions": [
+        { "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }
+      ]
     }
   ],
 
@@ -283,6 +329,7 @@ HARD CONSTRAINTS:
 6. final_score = 95 − sum(penalties), minimum 10.
 7. overall_score MUST equal final_score.
 8. All score values are integers 0-100. No string values. No explanation outside JSON.
+9. Coordinate values in regions are floats 0.0-1.0, relative to the first image.
 """
 
     user_prompt = schema_template.replace("{conditions_str}", conditions_str)
@@ -325,6 +372,22 @@ HARD CONSTRAINTS:
 
         result = json.loads(clean_json)
         result = _enforce_score_consistency(result)
+
+        # Parse and populate regions/image_url for detected conditions
+        for cond in result.get("detected_condition", []):
+            if isinstance(cond, dict):
+                cond["regions"] = _parse_regions(cond.get("regions", []))
+                cond["image_url"] = None
+
+        # Parse and populate regions/image_url for visible area
+        va = result.get("visible_area")
+        if isinstance(va, dict):
+            va["regions"] = _parse_regions(va.get("regions", []))
+            va["image_url"] = None
+
+        # Initialize model_scores (populated later by local ML models)
+        result["model_scores"] = {}
+
         return result
 
     except Exception as exc:

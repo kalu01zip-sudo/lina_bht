@@ -24,6 +24,102 @@ from app.services.image_storage import upload_scan_image
 
 router = APIRouter(prefix="/scan", tags=["Face Scan"])
 
+
+async def _generate_and_upload_overlays_scan(
+    image_bytes: bytes,
+    ai_data: dict,
+    user_id: str,
+    scan_id: str,
+) -> dict:
+    """
+    Generate overlays for each condition in detected_condition and visible_area.
+    Uploads them to S3 and populates the image_url fields.
+    """
+    from app.utils.overlay_utils import generate_condition_overlay, generate_redness_overlay
+    from app.services.overlay_storage import upload_overlay_to_s3
+    from app.services.acne_detection import detect_acne_regions, detect_lesion_regions
+    import asyncio
+
+    # Conditions that should use the general lesion detector (not acne-specific)
+    LESION_CONDITIONS = {"blackheads", "whiteheads", "enlarged pores"}
+
+    # ── Condition overlays ────────────────────────────────────────────────
+    for cond in ai_data.get("detected_condition", []):
+        if isinstance(cond, dict):
+            cond_lower = cond.get("name", "").lower().strip()
+
+            # Acne / Pimples → acne-specific YOLO detector
+            if cond_lower == "acne / pimples":
+                try:
+                    local_regions = detect_acne_regions(image_bytes)
+                    if local_regions:
+                        cond["regions"] = local_regions
+                except Exception as exc:
+                    print(f"[ERROR] Local YOLO acne detection failed for condition: {exc}")
+
+            # Blackheads / Whiteheads / Enlarged Pores → general lesion YOLO detector
+            elif cond_lower in LESION_CONDITIONS:
+                try:
+                    local_regions = detect_lesion_regions(image_bytes)
+                    if local_regions:
+                        cond["regions"] = local_regions
+                except Exception as exc:
+                    print(f"[ERROR] Local YOLO lesion detection failed for '{cond_lower}': {exc}")
+
+            if cond.get("regions"):
+                try:
+                    overlay_bytes = await asyncio.to_thread(
+                        generate_condition_overlay,
+                        image_bytes,
+                        cond["name"],
+                        cond["regions"],
+                    )
+                    url = await upload_overlay_to_s3(
+                        overlay_bytes, user_id, scan_id, cond["name"],
+                    )
+                    cond["image_url"] = url
+                except Exception as exc:
+                    print(f"[ERROR] Overlay failed for '{cond.get('name')}': {exc}")
+
+    # ── Redness / Acne overlay (visible_area) ────────────────────────────
+    va = ai_data.get("visible_area")
+    if isinstance(va, dict):
+        cond_name = va.get("condition", "Redness")
+        # If the visible area is acne / pimple, run the local YOLO detector to override regions
+        if cond_name.lower() in ("acne", "pimple"):
+            try:
+                local_regions = detect_acne_regions(image_bytes)
+                if local_regions:
+                    va["regions"] = local_regions
+            except Exception as exc:
+                print(f"[ERROR] Local YOLO acne detection failed for visible_area: {exc}")
+
+        if va.get("regions"):
+            try:
+                if cond_name.lower() in ("redness", "irritation"):
+                    overlay_bytes = await asyncio.to_thread(
+                        generate_redness_overlay,
+                        image_bytes,
+                        va["regions"],
+                        va.get("score", 0),
+                    )
+                else:
+                    overlay_bytes = await asyncio.to_thread(
+                        generate_condition_overlay,
+                        image_bytes,
+                        cond_name,
+                        va["regions"],
+                    )
+                url = await upload_overlay_to_s3(
+                    overlay_bytes, user_id, scan_id, f"visible_{cond_name.lower()}",
+                )
+                va["image_url"] = url
+            except Exception as exc:
+                print(f"[ERROR] Area overlay failed for '{va.get('condition')}': {exc}")
+
+    return ai_data
+
+
 @router.post("/face")
 async def upload_face_images(
     current_user: CurrentUser,
@@ -61,6 +157,16 @@ async def upload_face_images(
     if valid_count != 5:
         raise HTTPException(400, "5 valid images are required")
 
+    # ── Optimize Images ───────────────────────────────────────────────────
+    # Optimise all 5 images immediately to max_px=1024. This resolves EXIF orientation
+    # differences and aligns dimensions for Claude, S3 uploads, local models, and overlays.
+    from app.utils.image_utils import optimise_image
+    optimised_images = []
+    for img_bytes in valid_images:
+        opt_bytes, _ = optimise_image(img_bytes, "image/jpeg", max_px=1024)
+        optimised_images.append(opt_bytes)
+    valid_images = optimised_images
+
     # ── Identity Check ────────────────────────────────────────────────────
     try:
         identity_check = await verify_same_person(valid_images)
@@ -92,6 +198,43 @@ async def upload_face_images(
     except Exception as e:
         print("AI ERROR:", str(e))
         raise HTTPException(500, f"AI failed: {str(e)}")
+
+    # ── Run local skin signals model for validated scores ─────────────────
+    model_scores: dict = {}
+    try:
+        from app.services.skin_signals import predict_skin_signals
+        model_scores = await asyncio.to_thread(predict_skin_signals, valid_images[0])
+        if model_scores:
+            print(f"[SKIN SIGNALS] Local model scores: {model_scores}")
+            # Blend local model scores into checked_area (70% model, 30% Claude)
+            checked = ai_data.get("checked_area", {})
+            BLEND_MAP = {
+                # model_key → list of checked_area keys it can enhance
+                "hydration":  ["hydration"],
+                "structure":  ["texture", "pore_size"],
+                "elasticity": ["elasticity", "firmness"],
+                "sun_damage": ["sun_damage", "uv_damage"],
+            }
+            for model_key, area_keys in BLEND_MAP.items():
+                if model_key in model_scores:
+                    local_val = model_scores[model_key]
+                    for area_key in area_keys:
+                        if area_key in checked:
+                            claude_val = checked[area_key]
+                            blended = round(0.7 * local_val + 0.3 * claude_val)
+                            checked[area_key] = max(0, min(100, blended))
+                            print(f"  [BLEND] {area_key}: Claude={claude_val} + Model={local_val:.1f} → {checked[area_key]}")
+
+            # Also blend the top-level hydration field
+            if "hydration" in model_scores:
+                claude_hydration = ai_data.get("hydration", 60)
+                blended_hydration = round(0.7 * model_scores["hydration"] + 0.3 * claude_hydration)
+                ai_data["hydration"] = max(0, min(100, blended_hydration))
+    except Exception as exc:
+        print(f"[WARN] Skin signals model failed (non-fatal): {exc}")
+
+    # Attach raw model scores for transparency
+    ai_data["model_scores"] = model_scores
 
     # Extract detected conditions from Claude response
     detected_condition_names = []
@@ -138,6 +281,23 @@ async def upload_face_images(
         "recipes": recipe_data,
         "images": uploaded_image_urls 
     })
+
+    # ── Generate & upload overlay images ──────────────────────────────────────
+    if scan_id and valid_images:
+        try:
+            ai_data = await _generate_and_upload_overlays_scan(
+                valid_images[0], ai_data, str(current_user["_id"]), scan_id
+            )
+            from app.core.mongo_client import scan_collection
+            from bson import ObjectId
+            # Update the stored scan in MongoDB with the updated ai_data containing S3 URLs
+            await asyncio.to_thread(
+                scan_collection.update_one,
+                {"_id": ObjectId(scan_id)},
+                {"$set": {"analysis": ai_data}}
+            )
+        except Exception as exc:
+            print(f"[ERROR] Overlay generation/upload failed: {exc}")
 
     # Record usage log in MongoDB
     await record_usage(user_id, "face_scan")

@@ -49,6 +49,8 @@ from pydantic import BaseModel
 from app.clients.claude_client import USE_LOCAL_LLM, async_vision_call, is_vision_available
 from app.core.database import get_db
 from app.utils.image_utils import optimise_image
+from app.utils.overlay_utils import generate_condition_overlay, generate_redness_overlay
+from app.services.overlay_storage import upload_overlay_to_s3
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/scan", tags=["Scan"])
@@ -99,17 +101,35 @@ def _sniff_media_type(data: bytes) -> str | None:
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 
+class Region(BaseModel):
+    """Normalised bounding box (0.0–1.0) relative to the analysed image."""
+    x:      float
+    y:      float
+    width:  float
+    height: float
+
+
 class DetectedTrigger(BaseModel):
     trigger_name:  str
     trigger_level: str   # low | medium | high
     cure_advice:   str
+    regions:       Optional[List[Region]] = None
+    image_url:     Optional[str] = None
+
+
+class VisibleRedness(BaseModel):
+    """Dedicated redness analysis — separate from the trigger list."""
+    score:     int                              # 0-100 redness intensity
+    regions:   Optional[List[Region]] = None
+    image_url: Optional[str] = None
 
 
 class FaceScanResponse(BaseModel):
-    scan_id:           Optional[str] = None
-    score:             int
-    advice:            str
-    detected_triggers: List[DetectedTrigger]
+    scan_id:            Optional[str] = None
+    score:              int
+    advice:             str
+    detected_triggers:  List[DetectedTrigger]
+    visible_redness:    Optional[VisibleRedness] = None
 
 
 class ScanHistoryItem(BaseModel):
@@ -117,6 +137,7 @@ class ScanHistoryItem(BaseModel):
     score:             int
     advice:            str
     detected_triggers: List[DetectedTrigger]
+    visible_redness:   Optional[VisibleRedness] = None
     scanned_at:        str   # ISO 8601
     is_mock:           bool
     image_count:       int
@@ -133,26 +154,37 @@ MOCK_RESPONSE = FaceScanResponse(
         "Your skin shows mild oiliness and early acne along the T-zone. "
         "A salicylic acid cleanser morning and night will help greatly."
     ),
+    visible_redness = VisibleRedness(
+        score   = 24,
+        regions = [Region(x=0.30, y=0.25, width=0.40, height=0.20)],
+    ),
     detected_triggers = [
         DetectedTrigger(
             trigger_name  = "Acne / Pimples",
             trigger_level = "medium",
             cure_advice   = "Use salicylic acid cleanser twice daily.",
+            regions       = [
+                Region(x=0.42, y=0.35, width=0.08, height=0.07),
+                Region(x=0.55, y=0.28, width=0.06, height=0.06),
+            ],
         ),
         DetectedTrigger(
             trigger_name  = "Oiliness",
             trigger_level = "medium",
             cure_advice   = "Apply oil-free niacinamide moisturiser every morning.",
+            regions       = [Region(x=0.30, y=0.15, width=0.40, height=0.30)],
         ),
         DetectedTrigger(
             trigger_name  = "Enlarged Pores",
             trigger_level = "low",
             cure_advice   = "Use a clay mask once or twice weekly.",
+            regions       = [Region(x=0.38, y=0.40, width=0.24, height=0.15)],
         ),
         DetectedTrigger(
             trigger_name  = "Dullness",
             trigger_level = "low",
             cure_advice   = "Add a vitamin C serum to morning routine.",
+            regions       = [],
         ),
     ],
 )
@@ -182,13 +214,23 @@ STEP 2 — SKIN ANALYSIS (only if all images pass)
 Analyse visible skin conditions across all images and return ONLY this JSON:
 {
   "face_detected": true,
+  "best_image_index": <integer 1-5, the image with the clearest frontal view>,
   "score": <integer 0-100, overall visible skin health>,
   "advice": "<exactly 2 sentences, total 17-20 words, warm and actionable>",
+  "visible_redness": {
+    "score": <integer 0-100, 0 = no visible redness, 100 = severe>,
+    "regions": [
+      { "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }
+    ]
+  },
   "detected_triggers": [
     {
       "trigger_name": "<concise condition name>",
       "trigger_level": "<low|medium|high>",
-      "cure_advice": "<exactly 6-7 words, specific actionable tip>"
+      "cure_advice": "<exactly 6-7 words, specific actionable tip>",
+      "regions": [
+        { "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }
+      ]
     }
   ]
 }
@@ -206,11 +248,21 @@ Triggers to report (only if clearly visible):
   Enlarged Pores, Fine Lines / Wrinkles, Dark Circles, Puffiness,
   Eczema / Dry Patches, Rosacea, Sun Damage, Dullness.
 
+Region coordinate rules:
+  - x, y = top-left corner of the bounding box, normalised 0.0–1.0.
+  - width, height = size of the bounding box, normalised 0.0–1.0.
+  - Coordinates are relative to the best_image_index image.
+  - Return at least 1 region per detected trigger if the area is localisable.
+  - For diffuse conditions (redness, oiliness, dullness), use larger boxes
+    covering the affected area.
+  - If a condition is not localisable, return an empty regions array [].
+
 Rules:
   - Return ONLY valid JSON — no markdown, no code fences, no extra keys.
   - advice: exactly 2 sentences, 17-20 words total.
   - cure_advice: exactly 6-7 words.
   - trigger_level: exactly one of: low, medium, high.
+  - best_image_index: 1-based index of the clearest frontal face image.
 """.strip()
 
 # ── Profile personalisation ───────────────────────────────────────────────────
@@ -415,7 +467,8 @@ def _build_content_blocks(encoded: list[tuple[str, str]]) -> list[dict]:
         "text": (
             "Validate all images contain the same person's clearly visible face. "
             "Then perform the full skin analysis personalised to the user profile "
-            "in the system prompt. Return only the JSON schema defined above."
+            "in the system prompt. Select the image with the clearest frontal "
+            "view as best_image_index. Return only the JSON schema defined above."
         ),
     })
     return blocks
@@ -454,9 +507,15 @@ async def _save_face_scan(
                 "trigger_name":  t.trigger_name,
                 "trigger_level": t.trigger_level,
                 "cure_advice":   t.cure_advice,
+                "regions":       [r.model_dump() for r in (t.regions or [])],
+                "image_url":     t.image_url,
             }
             for t in result.detected_triggers
         ],
+        "visible_redness": {
+            "score":   result.visible_redness.score,
+            "regions": [r.model_dump() for r in (result.visible_redness.regions or [])],
+        } if result.visible_redness else None,
         "scanned_at":       datetime.now(timezone.utc),
         "is_mock":          is_mock,
         "image_count":      image_count,
@@ -466,15 +525,41 @@ async def _save_face_scan(
     return str(res.inserted_id)
 
 
+# ── Region parsing helper ─────────────────────────────────────────────────────
+
+
+def _parse_regions(raw_regions: list) -> list[Region] | None:
+    """Parse and validate normalised region coordinates from Claude's JSON."""
+    if not raw_regions:
+        return None
+    regions: list[Region] = []
+    for r in raw_regions:
+        if not isinstance(r, dict):
+            continue
+        try:
+            region = Region(
+                x=float(r.get("x", 0)),
+                y=float(r.get("y", 0)),
+                width=float(r.get("width", 0)),
+                height=float(r.get("height", 0)),
+            )
+            if region.width < 0.01 or region.height < 0.01:
+                continue
+            regions.append(region)
+        except (TypeError, ValueError):
+            continue
+    return regions if regions else None
+
+
 # ── Claude Vision call ────────────────────────────────────────────────────────
 
 
 async def _call_claude_async(
     encoded:       list[tuple[str, str]],
     system_prompt: str,
-) -> FaceScanResponse:
+) -> tuple[FaceScanResponse, int]:
     try:
-        raw = await async_vision_call(system_prompt, _build_content_blocks(encoded), max_tokens=1024)
+        raw = await async_vision_call(system_prompt, _build_content_blocks(encoded), max_tokens=2048)
     except HTTPException:
         raise
     except Exception as exc:
@@ -531,12 +616,131 @@ async def _call_claude_async(
             trigger_name  = str(t.get("trigger_name",  "Unknown")).strip(),
             trigger_level = level,
             cure_advice   = str(t.get("cure_advice",   "Consult a dermatologist.")).strip(),
+            regions       = _parse_regions(t.get("regions", [])),
         ))
+
+    # ── Visible redness ───────────────────────────────────────────────────
+    vr_data = data.get("visible_redness")
+    visible_redness = None
+    if isinstance(vr_data, dict):
+        try:
+            vr_score = max(0, min(100, int(vr_data.get("score", 0))))
+            vr_regions = _parse_regions(vr_data.get("regions", []))
+            visible_redness = VisibleRedness(
+                score=vr_score, regions=vr_regions or None,
+            )
+        except (TypeError, ValueError):
+            logger.warning("Malformed visible_redness data: %s", vr_data)
+
+    # ── Best image index (1-based, default 1) ─────────────────────────────
+    try:
+        best_idx = max(1, min(5, int(data.get("best_image_index", 1))))
+    except (TypeError, ValueError):
+        best_idx = 1
 
     return FaceScanResponse(
         score             = score,
         advice            = str(data["advice"]).strip(),
         detected_triggers = triggers,
+        visible_redness   = visible_redness,
+    ), best_idx
+
+
+# ── Overlay generation & upload ───────────────────────────────────────────────
+
+
+async def _generate_and_upload_overlays(
+    encoded_images: list[tuple[str, str]],
+    result:         FaceScanResponse,
+    user_id:        str,
+    scan_id:        str,
+    best_image_idx: int,
+) -> FaceScanResponse:
+    """
+    Post-processing: generate condition overlays and upload to S3.
+
+    For each detected trigger with regions, draw an annotated image on the
+    best face photo and upload it.  Same for visible_redness.
+
+    Errors are logged but never fail the scan — the response is returned
+    without image_url fields (graceful degradation).
+    """
+    # Decode the best image from base64
+    idx = max(0, min(len(encoded_images) - 1, best_image_idx - 1))
+    b64_data, _ = encoded_images[idx]
+    image_bytes = base64.b64decode(b64_data)
+
+    # ── Condition overlays ────────────────────────────────────────────────
+    updated_triggers: list[DetectedTrigger] = []
+    for trigger in result.detected_triggers:
+        if trigger.regions:
+            try:
+                region_dicts = [r.model_dump() for r in trigger.regions]
+                overlay_bytes = await asyncio.to_thread(
+                    generate_condition_overlay,
+                    image_bytes,
+                    trigger.trigger_name,
+                    region_dicts,
+                )
+                url = await upload_overlay_to_s3(
+                    overlay_bytes, user_id, scan_id, trigger.trigger_name,
+                )
+                trigger = trigger.model_copy(update={"image_url": url})
+            except Exception as exc:
+                logger.error("Overlay failed for '%s': %s", trigger.trigger_name, exc)
+        updated_triggers.append(trigger)
+
+    # ── Redness overlay ───────────────────────────────────────────────────
+    updated_redness = result.visible_redness
+    if result.visible_redness and result.visible_redness.regions:
+        try:
+            redness_dicts = [r.model_dump() for r in result.visible_redness.regions]
+            redness_bytes = await asyncio.to_thread(
+                generate_redness_overlay,
+                image_bytes,
+                redness_dicts,
+                result.visible_redness.score,
+            )
+            url = await upload_overlay_to_s3(
+                redness_bytes, user_id, scan_id, "visible_redness",
+            )
+            updated_redness = result.visible_redness.model_copy(
+                update={"image_url": url},
+            )
+        except Exception as exc:
+            logger.error("Redness overlay failed: %s", exc)
+
+    return result.model_copy(update={
+        "detected_triggers": updated_triggers,
+        "visible_redness":   updated_redness,
+    })
+
+
+async def _update_scan_overlays(scan_id: str, result: FaceScanResponse) -> None:
+    """Patch the scan document with overlay image URLs after generation."""
+    update: dict = {}
+
+    update["detected_triggers"] = [
+        {
+            "trigger_name":  t.trigger_name,
+            "trigger_level": t.trigger_level,
+            "cure_advice":   t.cure_advice,
+            "regions":       [r.model_dump() for r in (t.regions or [])],
+            "image_url":     t.image_url,
+        }
+        for t in result.detected_triggers
+    ]
+
+    if result.visible_redness:
+        update["visible_redness"] = {
+            "score":     result.visible_redness.score,
+            "regions":   [r.model_dump() for r in (result.visible_redness.regions or [])],
+            "image_url": result.visible_redness.image_url,
+        }
+
+    await get_db()["scan_results"].update_one(
+        {"_id": ObjectId(scan_id)},
+        {"$set": update},
     )
 
 
@@ -633,9 +837,10 @@ async def face_scan(
         raise _err(500, "INTERNAL_ERROR", f"Unexpected error: {exc}")
 
     # ── Claude Vision (personalised) ──────────────────────────────────────────
-    result = await _call_claude_async(encoded, system_prompt)
+    result, best_image_index = await _call_claude_async(encoded, system_prompt)
 
     # ── Save to DB ────────────────────────────────────────────────────────────
+    scan_id = None
     try:
         scan_id = await _save_face_scan(
             user_id, result, profile_snapshot,
@@ -644,6 +849,16 @@ async def face_scan(
         result = result.model_copy(update={"scan_id": scan_id})
     except Exception as exc:
         logger.error("Failed to save face scan: %s", exc)
+
+    # ── Generate & upload overlay images ──────────────────────────────────────
+    if scan_id:
+        try:
+            result = await _generate_and_upload_overlays(
+                encoded, result, user_id, scan_id, best_image_index,
+            )
+            await _update_scan_overlays(scan_id, result)
+        except Exception as exc:
+            logger.error("Overlay generation failed (non-fatal): %s", exc)
 
     return result
 
@@ -680,15 +895,27 @@ async def face_scan_history(
                 trigger_name  = t.get("trigger_name",  "Unknown"),
                 trigger_level = t.get("trigger_level", "low"),
                 cure_advice   = t.get("cure_advice",   ""),
+                regions       = _parse_regions(t.get("regions", [])),
+                image_url     = t.get("image_url"),
             )
             for t in doc.get("detected_triggers", [])
         ]
+        # ── Visible redness from DB ───────────────────────────────────────
+        vr_doc = doc.get("visible_redness")
+        visible_redness = None
+        if isinstance(vr_doc, dict):
+            visible_redness = VisibleRedness(
+                score     = vr_doc.get("score", 0),
+                regions   = _parse_regions(vr_doc.get("regions", [])),
+                image_url = vr_doc.get("image_url"),
+            )
         scanned_at = doc.get("scanned_at", "")
         items.append(ScanHistoryItem(
             scan_id           = str(doc["_id"]),
             score             = doc.get("score", 0),
             advice            = doc.get("advice", ""),
             detected_triggers = triggers,
+            visible_redness   = visible_redness,
             scanned_at        = scanned_at.isoformat() if isinstance(scanned_at, datetime) else str(scanned_at),
             is_mock           = doc.get("is_mock", False),
             image_count       = doc.get("image_count", 0),
