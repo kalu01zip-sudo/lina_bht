@@ -80,19 +80,19 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         print(f"[WARN] Usage-limiter indexes failed (non-fatal): {exc}")
 
-    # ── Start Lia notification scheduler ──────────────────────────────────
+    # ── Start Gixy notification scheduler ──────────────────────────────────
     try:
         from app.services.lia_scheduler import start_scheduler, stop_scheduler
         start_scheduler()
-        print("[OK] Lia scheduler started.")
+        print("[OK] Gixy scheduler started.")
     except Exception as exc:
-        print(f"[WARN] Lia scheduler failed to start (non-fatal): {exc}")
+        print(f"[WARN] Gixy scheduler failed to start (non-fatal): {exc}")
         stop_scheduler = None
 
     print(f"[READY] SkinSense API ready.  LLM = {_llm_label()}")
     yield
 
-    # ── Stop Lia scheduler ────────────────────────────────────────────────
+    # ── Stop Gixy scheduler ────────────────────────────────────────────────
     try:
         if stop_scheduler:
             stop_scheduler()

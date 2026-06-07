@@ -1,7 +1,7 @@
 # routers/chat.py
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║         SkinSense — Lia AI Coach  (v4 — Personalized Coach)     ║
+║         SkinSense — Gixy AI Coach  (v4 — Personalized Coach)    ║
 ║                                                                  ║
 ║  Endpoints:                                                      ║
 ║   POST /chat/message      → Send a message (SSE streaming reply)║
@@ -10,7 +10,7 @@
 ║   DELETE /chat/history    → Clear all chat history              ║
 ╚══════════════════════════════════════════════════════════════════╝
 
-Lia is a warm, motivational, personalized skincare coach that:
+Gixy is a warm, motivational, personalized skincare coach that:
   • Knows the user's full profile, skin/hair concerns, and allergies
   • References actual scan results and progress over time
   • Encourages consistency and educates users on WHY things work
@@ -48,7 +48,7 @@ from app.clients.claude_client import async_stream_chat, ClaudeClient, USE_LOCAL
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/chat", tags=["Lia Chat"])
+router = APIRouter(prefix="/chat", tags=["Gixy Chat"])
 
 # ── Memory config ─────────────────────────────────────────────────────────────
 # Summariser fires every N user messages; keeps newest MAX_MEMORY_BULLETS bullets.
@@ -589,7 +589,7 @@ def _format_profile_score_context(score_data: dict | None) -> str:
 def _format_subscription_context(status: str) -> str:
     """
     Format the user's subscription status for the system prompt.
-    Lia uses this to know which premium features to mention.
+    Gixy uses this to know which premium features to mention.
     """
     labels = {
         "premium":  "Premium (full access — AI Check, all premium features unlocked)",
@@ -619,7 +619,7 @@ def _build_system_prompt(
     scan_progress: dict | None = None,
 ) -> str:
     """
-    Builds Lia's system prompt across nine layers:
+    Builds Gixy's system prompt across nine layers:
 
       1. Core role + personality
       2. Subscription status
@@ -649,7 +649,7 @@ def _build_system_prompt(
         base = override_prompt
     else:
         base = """\
-You are Lia — a warm, motivational, and knowledgeable skincare coach \
+You are Gixy — a warm, motivational, and knowledgeable skincare coach \
 embedded in the SkinSense app. You speak like a caring friend who genuinely \
 wants the user to succeed. Keep responses concise (1-3 short paragraphs max).
 
@@ -808,7 +808,7 @@ wellness, politely redirect.
 # ══════════════════════════════════════════════════════════════════════════════
 
 _SUMMARIZER_SYSTEM = """\
-You are a memory extractor for a skincare AI coach named Lia.
+You are a memory extractor for a skincare AI coach named Gixy.
 You will be given the last 10 messages between a user and the AI.
 
 Your job: extract 3 to 5 short, factual bullet points about the USER ONLY.

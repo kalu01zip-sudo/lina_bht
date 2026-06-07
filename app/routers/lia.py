@@ -1,6 +1,6 @@
 # app/routers/lia.py
 """
-Lia — Notification & Coaching API endpoints.
+Gixy — Notification & Coaching API endpoints.
 
 Endpoints:
   GET    /lia/notifications           → Fetch user's notifications
@@ -32,7 +32,7 @@ from app.core.mongo_client import scan_collection, saved_routines_collection
 
 router = APIRouter(
     prefix="/lia",
-    tags=["Lia Notification"],
+    tags=["Gixy Notification"],
 )
 
 
@@ -48,7 +48,7 @@ async def get_notifications(
     unread_only: bool = Query(default=False),
 ):
     """
-    Fetch the user's Lia notifications, newest first.
+    Fetch the user's Gixy notifications, newest first.
 
     Query params:
       - limit: max number of notifications (default 20, max 200)

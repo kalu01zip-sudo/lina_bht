@@ -302,7 +302,7 @@ async def upload_face_images(
     # Record usage log in MongoDB
     await record_usage(user_id, "face_scan")
 
-    # ── Lia: trigger post-scan alert if severe conditions detected ────────
+    # ── Gixy: trigger post-scan alert if severe conditions detected ────────────
     try:
         from app.services.lia_coaching_engine import trigger_post_scan_alert
         user_doc = await users_col().find_one({"_id": current_user["_id"]})
@@ -312,7 +312,7 @@ async def upload_face_images(
             user_id, user_doc or {}, ai_data,
         )
     except Exception as exc:
-        print(f"[Lia] Post-scan alert trigger failed (non-fatal): {exc}")
+        print(f"[Gixy] Post-scan alert trigger failed (non-fatal): {exc}")
 
     return {
         "scan_id": scan_id,

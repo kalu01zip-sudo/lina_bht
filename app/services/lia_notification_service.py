@@ -37,7 +37,7 @@ def save_notification(
         return doc
 
     except Exception as e:
-        print(f"[Lia] Notification save error: {e}")
+        print(f"[Gixy] Notification save error: {e}")
         return None
 
 
@@ -62,7 +62,7 @@ def get_user_notifications(
         return results
 
     except Exception as e:
-        print(f"[Lia] Notification fetch error: {e}")
+        print(f"[Gixy] Notification fetch error: {e}")
         return []
 
 
@@ -75,7 +75,7 @@ def get_unread_count(user_id: str) -> int:
         })
 
     except Exception as e:
-        print(f"[Lia] Unread count error: {e}")
+        print(f"[Gixy] Unread count error: {e}")
         return 0
 
 
@@ -89,7 +89,7 @@ def mark_read(notification_id: str, user_id: str) -> bool:
         return res.modified_count > 0 or res.matched_count > 0
 
     except Exception as e:
-        print(f"[Lia] Mark read error: {e}")
+        print(f"[Gixy] Mark read error: {e}")
         return False
 
 
@@ -103,7 +103,7 @@ def mark_all_read(user_id: str) -> int:
         return res.modified_count
 
     except Exception as e:
-        print(f"[Lia] Mark all read error: {e}")
+        print(f"[Gixy] Mark all read error: {e}")
         return 0
 
 
@@ -129,6 +129,6 @@ def has_recent_notification(
         return doc is not None
 
     except Exception as e:
-        print(f"[Lia] Recent check error: {e}")
+        print(f"[Gixy] Recent check error: {e}")
         return True  # fail-safe: assume sent → don't spam
 

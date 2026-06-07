@@ -1,6 +1,6 @@
 # app/services/lia_scheduler.py
 """
-Lia Scheduler — APScheduler cron jobs for proactive coaching notifications.
+Gixy Scheduler — APScheduler cron jobs for proactive coaching notifications.
 
 Schedule overview:
   8:00 AM   → morning routine reminders
@@ -111,7 +111,7 @@ async def _get_scan_count_last_30_days(user_id: str) -> int:
 
 async def run_morning_routine():
     """8:00 AM — Send morning routine reminders."""
-    logger.info("[Lia Scheduler] Running morning routine reminders...")
+    logger.info("[Gixy Scheduler] Running morning routine reminders...")
 
     users = await _get_all_active_users()
 
@@ -135,16 +135,16 @@ async def run_morning_routine():
 
         except Exception as exc:
             logger.warning(
-                "[Lia] Morning trigger failed for %s: %s",
+                "[Gixy] Morning trigger failed for %s: %s",
                 str(user["_id"])[:8], exc,
             )
 
-    logger.info("[Lia Scheduler] Morning routine job complete.")
+    logger.info("[Gixy Scheduler] Morning routine job complete.")
 
 
 async def run_evening_routine():
     """9:00 PM — Send evening routine reminders."""
-    logger.info("[Lia Scheduler] Running evening routine reminders...")
+    logger.info("[Gixy Scheduler] Running evening routine reminders...")
 
     users = await _get_all_active_users()
 
@@ -167,16 +167,16 @@ async def run_evening_routine():
 
         except Exception as exc:
             logger.warning(
-                "[Lia] Evening trigger failed for %s: %s",
+                "[Gixy] Evening trigger failed for %s: %s",
                 str(user["_id"])[:8], exc,
             )
 
-    logger.info("[Lia Scheduler] Evening routine job complete.")
+    logger.info("[Gixy Scheduler] Evening routine job complete.")
 
 
 async def run_weekly_progress():
     """Sunday 10:00 AM — Weekly progress check-in."""
-    logger.info("[Lia Scheduler] Running weekly progress check-ins...")
+    logger.info("[Gixy Scheduler] Running weekly progress check-ins...")
 
     users = await _get_all_active_users()
 
@@ -196,16 +196,16 @@ async def run_weekly_progress():
 
         except Exception as exc:
             logger.warning(
-                "[Lia] Weekly trigger failed for %s: %s",
+                "[Gixy] Weekly trigger failed for %s: %s",
                 str(user["_id"])[:8], exc,
             )
 
-    logger.info("[Lia Scheduler] Weekly progress job complete.")
+    logger.info("[Gixy Scheduler] Weekly progress job complete.")
 
 
 async def run_stress_check_in():
     """Weekly wellness check-in."""
-    logger.info("[Lia Scheduler] Running stress check-ins...")
+    logger.info("[Gixy Scheduler] Running stress check-ins...")
 
     users = await _get_all_active_users()
 
@@ -220,16 +220,16 @@ async def run_stress_check_in():
 
         except Exception as exc:
             logger.warning(
-                "[Lia] Stress check-in failed for %s: %s",
+                "[Gixy] Stress check-in failed for %s: %s",
                 str(user["_id"])[:8], exc,
             )
 
-    logger.info("[Lia Scheduler] Stress check-in job complete.")
+    logger.info("[Gixy Scheduler] Stress check-in job complete.")
 
 
 async def run_periodic_checks():
     """Every 6 hours — inactivity, hydration, streaks."""
-    logger.info("[Lia Scheduler] Running periodic checks...")
+    logger.info("[Gixy Scheduler] Running periodic checks...")
 
     users = await _get_all_active_users()
 
@@ -272,16 +272,16 @@ async def run_periodic_checks():
 
         except Exception as exc:
             logger.warning(
-                "[Lia] Periodic check failed for %s: %s",
+                "[Gixy] Periodic check failed for %s: %s",
                 str(user["_id"])[:8], exc,
             )
 
-    logger.info("[Lia Scheduler] Periodic checks complete.")
+    logger.info("[Gixy Scheduler] Periodic checks complete.")
 
 
 async def run_daily_routine_reset():
     """Midnight — reset daily routine completion state in MongoDB."""
-    logger.info("[Lia Scheduler] Resetting daily routine completion state...")
+    logger.info("[Gixy Scheduler] Resetting daily routine completion state...")
 
     def _reset():
         saved_routines_collection.update_many(
@@ -290,7 +290,7 @@ async def run_daily_routine_reset():
         )
 
     await asyncio.to_thread(_reset)
-    logger.info("[Lia Scheduler] Daily routine reset complete.")
+    logger.info("[Gixy Scheduler] Daily routine reset complete.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -320,7 +320,7 @@ def _schedule_reminder_job(scheduler: AsyncIOScheduler, reminder: dict):
     runner = runners.get(reminder.get("id"))
     if not runner:
         logger.warning(
-            "[Lia Scheduler] No runner mapped for reminder %s",
+            "[Gixy Scheduler] No runner mapped for reminder %s",
             reminder.get("id"),
         )
         return
@@ -335,13 +335,13 @@ def _schedule_reminder_job(scheduler: AsyncIOScheduler, reminder: dict):
         runner,
         CronTrigger(**cron_args),
         id=f"lia_{reminder['id']}",
-        name=f"Lia {reminder.get('title', reminder['id'])}",
+        name=f"Gixy {reminder.get('title', reminder['id'])}",
         replace_existing=True,
     )
 
 
 def start_scheduler():
-    """Start the Lia notification scheduler."""
+    """Start the Gixy notification scheduler."""
     global _scheduler
 
     if _scheduler:
@@ -357,7 +357,7 @@ def start_scheduler():
         run_periodic_checks,
         IntervalTrigger(hours=6),
         id="lia_periodic",
-        name="Lia Periodic Checks",
+        name="Gixy Periodic Checks",
         replace_existing=True,
     )
 
@@ -373,7 +373,7 @@ def start_scheduler():
     _scheduler.start()
     job_count = len(_scheduler.get_jobs())
     logger.info(
-        "[Lia Scheduler] Started with %d jobs from admin notification settings.",
+        "[Gixy Scheduler] Started with %d jobs from admin notification settings.",
         job_count,
     )
 
@@ -383,5 +383,5 @@ def stop_scheduler():
     global _scheduler
     if _scheduler:
         _scheduler.shutdown(wait=False)
-        logger.info("[Lia Scheduler] Stopped.")
+        logger.info("[Gixy Scheduler] Stopped.")
         _scheduler = None

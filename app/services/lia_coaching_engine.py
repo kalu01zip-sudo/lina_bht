@@ -1,6 +1,6 @@
 # app/services/lia_coaching_engine.py
 """
-Lia Coaching Engine — the brain of the notification system.
+Gixy Coaching Engine — the brain of the notification system.
 
 Each trigger function:
   1. Queries user data from MongoDB
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════════════════
 
 COACHING_SYSTEM = """\
-You are Lia, a warm and knowledgeable skincare coach inside the SkinSense app.
+You are Gixy, a warm and knowledgeable skincare coach inside the SkinSense app.
 Generate a SHORT push notification. Return ONLY a JSON object with "title" and "message" keys.
 
 Rules:
@@ -87,15 +87,15 @@ def _generate_coaching_message(
         if start != -1 and end != -1:
             data = json.loads(cleaned[start:end + 1])
             return (
-                data.get("title", "Lia has a tip for you"),
+                data.get("title", "Gixy has a tip for you"),
                 data.get("message", "Check your skincare routine today."),
             )
 
     except Exception as exc:
-        logger.error("Lia coaching message generation failed: %s", exc)
+        logger.error("Gixy coaching message generation failed: %s", exc)
 
     # Fallback
-    return "Lia has a tip for you", "Check your skincare routine today."
+    return "Gixy has a tip for you", "Check your skincare routine today."
 
 
 def _deliver_notification(
@@ -146,7 +146,7 @@ def _deliver_notification(
                 pass
 
         logger.info(
-            "[Lia] Push sent to %s: %d/%d devices via OneSignal",
+            "[Gixy] Push sent to %s: %d/%d devices via OneSignal",
             user_id[:8], success, len(sub_ids),
         )
 
@@ -202,7 +202,7 @@ def trigger_post_scan_alert(
         data={"source": "face_scan"},
     )
 
-    logger.info("[Lia] Post-scan alert sent to %s", user_id[:8])
+    logger.info("[Gixy] Post-scan alert sent to %s", user_id[:8])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -552,7 +552,7 @@ def trigger_new_user_welcome(
 
     title = "Welcome to SkinSense!"
     message = (
-        f"{greeting}I'm Lia, your personal skincare coach. "
+        f"{greeting}I'm Gixy, your personal skincare coach. "
         "Do a quick face scan and I'll build your perfect routine."
     )
 
