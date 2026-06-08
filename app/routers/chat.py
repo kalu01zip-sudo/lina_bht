@@ -361,6 +361,152 @@ async def _get_scan_progress(user_id: str) -> dict | None:
     }
 
 
+async def _get_scan_history(
+    user_id: str, face_limit: int = 5, scalp_limit: int = 3,
+) -> tuple[list[dict], list[dict]]:
+    """Fetch recent face + scalp scan summaries for trend context."""
+    db = get_db()
+    uid_str = str(user_id)
+
+    face_docs, scalp_docs = await asyncio.gather(
+        db.face_scans.find(
+            {"user_id": uid_str},
+            {
+                "analysis.overall_score": 1,
+                "analysis.hydration": 1,
+                "analysis.detected_condition.name": 1,
+                "analysis.detected_condition.severity": 1,
+                "created_at": 1,
+            },
+        ).sort("created_at", -1).limit(face_limit).to_list(face_limit),
+
+        db.scalp_scans.find(
+            {"user_id": uid_str},
+            {
+                "analysis.overall_score": 1,
+                "analysis.detected_condition.name": 1,
+                "analysis.detected_condition.severity": 1,
+                "created_at": 1,
+            },
+        ).sort("created_at", -1).limit(scalp_limit).to_list(scalp_limit),
+    )
+    return face_docs, scalp_docs
+
+
+async def _get_scalp_progress(user_id: str) -> dict | None:
+    """
+    Compare the two most recent scalp scans to compute progress.
+    Returns a dict with score deltas and improved/worsened conditions,
+    or None if fewer than 2 scalp scans exist.
+    """
+    db = get_db()
+    uid_str = str(user_id)
+    try:
+        scans = await (
+            db.scalp_scans
+            .find({"user_id": uid_str})
+            .sort("created_at", -1)
+            .limit(2)
+            .to_list(length=2)
+        )
+    except Exception:
+        scans = []
+
+    if len(scans) < 2:
+        return None
+
+    latest = scans[0].get("analysis", {})
+    previous = scans[1].get("analysis", {})
+
+    latest_score = latest.get("overall_score", 0)
+    prev_score = previous.get("overall_score", 0)
+
+    severity_rank = {"Mild": 1, "Moderate": 2, "Severe": 3}
+    latest_conds = {
+        c["name"]: c["severity"]
+        for c in latest.get("detected_condition", [])
+        if isinstance(c, dict)
+    }
+    prev_conds = {
+        c["name"]: c["severity"]
+        for c in previous.get("detected_condition", [])
+        if isinstance(c, dict)
+    }
+
+    improved = []
+    worsened = []
+    for name in set(list(latest_conds) + list(prev_conds)):
+        curr = severity_rank.get(latest_conds.get(name), 0)
+        prev = severity_rank.get(prev_conds.get(name), 0)
+        if curr < prev:
+            improved.append(name)
+        elif curr > prev:
+            worsened.append(name)
+
+    return {
+        "latest_score": latest_score,
+        "previous_score": prev_score,
+        "score_delta": latest_score - prev_score,
+        "improved_conditions": improved,
+        "worsened_conditions": worsened,
+    }
+
+
+async def _get_nutrition_recommendations(
+    detected_conditions: list[str],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """
+    Fetch nutrition, food, and recipe recommendations based on detected conditions.
+    Uses sync pymongo collections via asyncio.to_thread.
+    """
+    if not detected_conditions:
+        return [], [], []
+
+    try:
+        from app.core.mongo_client import (
+            nutritions_collection,
+            foods_collection,
+            recipes_collection,
+        )
+
+        def _fetch():
+            conditions = [
+                c.lower().strip().replace(" ", "_") for c in detected_conditions
+            ]
+            query = {"detected_condition": {"$in": conditions}}
+
+            nutritions = list(
+                nutritions_collection.find(
+                    query,
+                    {"_id": 0, "name": 1, "benefits": 1, "detected_condition": 1},
+                ).limit(5)
+            )
+            foods = list(
+                foods_collection.find(
+                    query,
+                    {
+                        "_id": 0, "name": 1, "ingredients": 1,
+                        "benefits": 1, "detected_condition": 1,
+                    },
+                ).limit(5)
+            )
+            recipes = list(
+                recipes_collection.find(
+                    query,
+                    {
+                        "_id": 0, "name": 1, "main_ingredients": 1,
+                        "how_it_improves": 1, "detected_condition": 1,
+                    },
+                ).limit(3)
+            )
+            return nutritions, foods, recipes
+
+        return await asyncio.to_thread(_fetch)
+    except Exception as exc:
+        logger.warning("Nutrition recommendations fetch failed: %s", exc)
+        return [], [], []
+
+
 async def _load_history(user_id: str, limit: int = 20) -> list[dict]:
     """Load last N chat messages as role/content dicts for LLM context."""
     db = get_db()
@@ -603,20 +749,246 @@ def _format_subscription_context(status: str) -> str:
     )
 
 
+def _format_scan_history_context(
+    face_history: list[dict], scalp_history: list[dict],
+) -> str:
+    """
+    Format scan history timeline so Gixy can discuss trends.
+    Shows the last 5 face scans and last 3 scalp scans in date order.
+    """
+    if not face_history and not scalp_history:
+        return ""
+
+    lines: list[str] = [
+        "── SCAN HISTORY (recent scans for trend awareness) ─────────────",
+    ]
+
+    if face_history:
+        lines.append("  Face scans:")
+        for doc in face_history:
+            analysis = doc.get("analysis", {})
+            created = doc.get("created_at")
+            date_str = (
+                created.strftime("%d %b %Y")
+                if isinstance(created, datetime)
+                else str(created)[:10] if created else "?"
+            )
+            score = analysis.get("overall_score", "?")
+            hydration = analysis.get("hydration", "?")
+            conds = [
+                c.get("name", "?")
+                for c in analysis.get("detected_condition", [])
+                if isinstance(c, dict)
+            ]
+            cond_str = ", ".join(conds) if conds else "none detected"
+            lines.append(
+                f"    {date_str} — score: {score}/100, "
+                f"hydration: {hydration}%, conditions: {cond_str}"
+            )
+
+    if scalp_history:
+        lines.append("  Scalp/hair scans:")
+        for doc in scalp_history:
+            analysis = doc.get("analysis", {})
+            created = doc.get("created_at")
+            date_str = (
+                created.strftime("%d %b %Y")
+                if isinstance(created, datetime)
+                else str(created)[:10] if created else "?"
+            )
+            score = analysis.get("overall_score", "?")
+            conds = [
+                c.get("name", "?")
+                for c in analysis.get("detected_condition", [])
+                if isinstance(c, dict)
+            ]
+            cond_str = ", ".join(conds) if conds else "none detected"
+            lines.append(
+                f"    {date_str} — score: {score}/100, conditions: {cond_str}"
+            )
+
+    lines.append("─────────────────────────────────────────────────────────────────")
+    return "\n".join(lines)
+
+
+def _format_scalp_progress_context(scalp_progress: dict | None) -> str:
+    """Format scalp scan progress comparison for motivational feedback."""
+    if not scalp_progress:
+        return ""
+
+    delta = scalp_progress.get("score_delta", 0)
+    direction = "improved" if delta > 0 else "declined" if delta < 0 else "unchanged"
+    lines = [
+        "── SCALP SCAN PROGRESS ──────────────────────────────────────────",
+        f"  Score: {scalp_progress.get('previous_score', '?')} → "
+        f"{scalp_progress.get('latest_score', '?')} ({direction} by {abs(delta)})",
+    ]
+    improved = scalp_progress.get("improved_conditions", [])
+    worsened = scalp_progress.get("worsened_conditions", [])
+    if improved:
+        lines.append(f"  Improved: {', '.join(improved)}")
+    if worsened:
+        lines.append(f"  Needs attention: {', '.join(worsened)}")
+    lines.append("─────────────────────────────────────────────────────────────────")
+    return "\n".join(lines)
+
+
+def _format_nutrition_context(
+    nutritions: list[dict], foods: list[dict], recipes: list[dict],
+) -> str:
+    """
+    Format nutrition / food / recipe recommendations based on detected conditions.
+    Gives Gixy real dietary data to reference instead of generic advice.
+    """
+    if not nutritions and not foods and not recipes:
+        return ""
+
+    lines: list[str] = [
+        "── PERSONALISED NUTRITION RECOMMENDATIONS (based on conditions) ─",
+    ]
+
+    if nutritions:
+        lines.append("  Key Nutrients:")
+        for n in nutritions:
+            name = n.get("name", "?")
+            benefits = n.get("benefits", "")
+            lines.append(
+                f"    • {name}: {benefits}" if benefits else f"    • {name}"
+            )
+
+    if foods:
+        lines.append("  Recommended Foods:")
+        for f_item in foods:
+            name = f_item.get("name", "?")
+            benefits = f_item.get("benefits", "")
+            ingredients = f_item.get("ingredients", [])
+            ing_str = (
+                f" (contains: {', '.join(ingredients)})"
+                if ingredients else ""
+            )
+            lines.append(
+                f"    • {name}{ing_str}: {benefits}"
+                if benefits else f"    • {name}{ing_str}"
+            )
+
+    if recipes:
+        lines.append("  Recommended Recipes:")
+        for r in recipes:
+            name = r.get("name", "?")
+            main_ing = r.get("main_ingredients", [])
+            how = r.get("how_it_improves", "")
+            ing_str = (
+                f" (ingredients: {', '.join(main_ing)})"
+                if main_ing else ""
+            )
+            lines.append(
+                f"    • {name}{ing_str}: {how}"
+                if how else f"    • {name}{ing_str}"
+            )
+
+    lines.append("─────────────────────────────────────────────────────────────────")
+    return "\n".join(lines)
+
+
+def _format_routine_ingredients_context(
+    routine: dict[str, list[dict]], product_scans: list[dict],
+) -> str:
+    """
+    Cross-reference routine products with scanned product data so Gixy
+    can answer ingredient-specific questions about the user's routine.
+    """
+    if not routine or not product_scans:
+        return ""
+
+    # Build lookup: lowercase product name → scan data
+    scan_lookup: dict[str, dict] = {}
+    for scan in product_scans:
+        nested = scan.get("product") or {}
+        name = scan.get("product_name") or nested.get("name", "")
+        if name:
+            scan_lookup[name.strip().lower()] = scan
+
+    matches: list[dict] = []
+    for slot in ("morning", "night", "weekly"):
+        for step in routine.get(slot, []):
+            pname = step.get("product_name", "").strip().lower()
+            if pname in scan_lookup:
+                scan = scan_lookup[pname]
+                analysis = scan.get("analysis") or {}
+                compat = (
+                    scan.get("compatibility")
+                    or analysis.get("compatibility", "")
+                )
+                score = (
+                    scan.get("compatibility_score")
+                    or analysis.get("compatibility_score")
+                )
+                good_ings = (
+                    analysis.get("good_ingredients")
+                    or scan.get("good_ingredients")
+                    or []
+                )
+                bad_ings = (
+                    analysis.get("bad_ingredients")
+                    or scan.get("bad_ingredients")
+                    or []
+                )
+                matches.append({
+                    "name": step.get("product_name", pname),
+                    "slot": slot,
+                    "compatibility": compat,
+                    "score": score,
+                    "good_ingredients": good_ings[:5],
+                    "bad_ingredients": bad_ings[:5],
+                })
+
+    if not matches:
+        return ""
+
+    lines: list[str] = [
+        "── ROUTINE PRODUCT INGREDIENT ANALYSIS ──────────────────────────",
+    ]
+    for m in matches:
+        score_str = f" ({m['score']}/100)" if m['score'] else ""
+        lines.append(
+            f"  • {m['name']} [{m['slot']}] — {m['compatibility']}{score_str}"
+        )
+        if m["good_ingredients"]:
+            goods = ", ".join(
+                str(g) if isinstance(g, str) else g.get("name", str(g))
+                for g in m["good_ingredients"]
+            )
+            lines.append(f"      ✓ Good: {goods}")
+        if m["bad_ingredients"]:
+            bads = ", ".join(
+                str(b) if isinstance(b, str) else b.get("name", str(b))
+                for b in m["bad_ingredients"]
+            )
+            lines.append(f"      ✗ Avoid: {bads}")
+    lines.append("─────────────────────────────────────────────────────────────────")
+    return "\n".join(lines)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  SYSTEM PROMPT BUILDER
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_system_prompt(
-    profile:       dict | None,
-    memories:      list[str],
-    face_scan:     dict | None,
-    scalp_scan:    dict | None,
-    routine:       dict[str, list[dict]],
-    product_scans: list[dict],
-    profile_score: dict | None,
-    subscription:  str,
-    scan_progress: dict | None = None,
+    profile:             dict | None,
+    memories:            list[str],
+    face_scan:           dict | None,
+    scalp_scan:          dict | None,
+    routine:             dict[str, list[dict]],
+    product_scans:       list[dict],
+    profile_score:       dict | None,
+    subscription:        str,
+    scan_progress:       dict | None = None,
+    scalp_progress:      dict | None = None,
+    face_history:        list[dict] = None,
+    scalp_history:       list[dict] = None,
+    nutritions:          list[dict] = None,
+    foods:               list[dict] = None,
+    recipes:             list[dict] = None,
 ) -> str:
     """
     Builds Gixy's system prompt across nine layers:
@@ -627,9 +999,13 @@ def _build_system_prompt(
       4. Profile score metrics
       5. Persistent memories
       6. Latest scan results (face + hair/scalp)
+      6b. Scan history timeline (last 5 scans)
       7. Current routine
+      7b. Personalised nutrition recommendations
       8. Recent product scans
+      8b. Routine product ingredient analysis
       9. Scan progress (comparison)
+      9b. Scalp scan progress (comparison)
 
     Every layer is optional — missing data produces an empty string and is
     silently omitted so the prompt stays clean.
@@ -751,6 +1127,15 @@ wellness, politely redirect.
             "their skin or scalp health, connect your advice to these actual findings.\n"
         )
 
+    # ── Layer 6b — Scan history ───────────────────────────────────────────────
+    history_ctx = _format_scan_history_context(face_history or [], scalp_history or [])
+    if history_ctx:
+        base += (
+            "\n" + history_ctx + "\n"
+            "This shows the user's historical scores and conditions. Use it to "
+            "recognise long-term trends and show the user you know their history.\n"
+        )
+
     # ── Layer 7 — Current routine ─────────────────────────────────────────────
     routine_ctx = _format_routine_context(routine)
     if routine_ctx:
@@ -769,6 +1154,16 @@ wellness, politely redirect.
             "use 'Generate Routine' after their next face or scalp scan.\n"
         )
 
+    # ── Layer 7b — Personalised nutrition recommendations ────────────────────
+    nutrition_ctx = _format_nutrition_context(nutritions or [], foods or [], recipes or [])
+    if nutrition_ctx:
+        base += (
+            "\n" + nutrition_ctx + "\n"
+            "Use these diet and nutrient suggestions to guide the user on "
+            "internal wellness for their skin/hair conditions. Focus on "
+            "whole foods and healthy recipes.\n"
+        )
+
     # ── Layer 8 — Recent product scans ───────────────────────────────────────
     product_ctx = _format_product_scans_context(product_scans)
     if product_ctx:
@@ -776,6 +1171,16 @@ wellness, politely redirect.
             "\n" + product_ctx + "\n"
             "If the user asks about a product they've scanned, refer to these "
             "results. Note the compatibility score and any flagged concerns.\n"
+        )
+
+    # ── Layer 8b — Routine product ingredient analysis ────────────────────────
+    routine_ings_ctx = _format_routine_ingredients_context(routine, product_scans)
+    if routine_ings_ctx:
+        base += (
+            "\n" + routine_ings_ctx + "\n"
+            "Cross-reference this ingredient analysis when the user asks about "
+            "ingredients in their routine or if certain products in their routine "
+            "are compatible with their skin type.\n"
         )
 
     # ── Layer 9 — Scan progress ───────────────────────────────────────────────
@@ -798,6 +1203,15 @@ wellness, politely redirect.
             "\n" + "\n".join(progress_lines) + "\n"
             "Reference this progress when motivating the user. Celebrate improvements "
             "and offer gentle, actionable advice for areas that need attention.\n"
+        )
+
+    # ── Layer 9b — Scalp scan progress ────────────────────────────────────────
+    scalp_progress_ctx = _format_scalp_progress_context(scalp_progress)
+    if scalp_progress_ctx:
+        base += (
+            "\n" + scalp_progress_ctx + "\n"
+            "Reference this scalp scan progress to motivate the user on their hair "
+            "and scalp health journey.\n"
         )
 
     return base
@@ -1127,30 +1541,59 @@ async def send_message(
         product_scans,
         subscription,
         scan_progress,
+        scalp_progress,
+        (face_history, scalp_history),
     ) = await asyncio.gather(
         _get_user_profile(user_id),
         _get_user_memories(user_id),
         _get_latest_scans(user_id),
         _load_history(user_id, limit=20),
         _get_routine_steps(user_id),
-        _get_product_scans(user_id, limit=3),
+        _get_product_scans(user_id, limit=20),
         _get_subscription_status(user_id),
         _get_scan_progress(user_id),
+        _get_scalp_progress(user_id),
+        _get_scan_history(user_id, face_limit=5, scalp_limit=5),
     )
 
     profile_score = _compute_profile_score(profile)
 
+    # Fetch nutrition recommendations based on detected conditions
+    detected_conditions = []
+    for scan in (face_scan, scalp_scan):
+        if scan:
+            analysis = scan.get("analysis", {})
+            for cond in analysis.get("detected_condition", []):
+                if isinstance(cond, dict) and cond.get("name"):
+                    detected_conditions.append(cond["name"])
+
+    # Unique conditions, keeping order
+    seen = set()
+    unique_conditions = []
+    for c in detected_conditions:
+        if c not in seen:
+            seen.add(c)
+            unique_conditions.append(c)
+
+    nutritions, foods, recipes = await _get_nutrition_recommendations(unique_conditions)
+
     # ── 4. Build enriched system prompt ──────────────────────────────────────
     system = _build_system_prompt(
-        profile       = profile,
-        memories      = memories,
-        face_scan     = face_scan,
-        scalp_scan    = scalp_scan,
-        routine       = routine,
-        product_scans = product_scans,
-        profile_score = profile_score,
-        subscription  = subscription,
-        scan_progress = scan_progress,
+        profile        = profile,
+        memories       = memories,
+        face_scan      = face_scan,
+        scalp_scan     = scalp_scan,
+        routine        = routine,
+        product_scans  = product_scans,
+        profile_score  = profile_score,
+        subscription   = subscription,
+        scan_progress  = scan_progress,
+        scalp_progress = scalp_progress,
+        face_history   = face_history,
+        scalp_history  = scalp_history,
+        nutritions     = nutritions,
+        foods          = foods,
+        recipes        = recipes,
     )
 
     # ── 5. Stream the reply ───────────────────────────────────────────────────
@@ -1218,30 +1661,59 @@ async def send_message_sync(
         product_scans,
         subscription,
         scan_progress,
+        scalp_progress,
+        (face_history, scalp_history),
     ) = await asyncio.gather(
         _get_user_profile(user_id),
         _get_user_memories(user_id),
         _get_latest_scans(user_id),
         _load_history(user_id, limit=20),
         _get_routine_steps(user_id),
-        _get_product_scans(user_id, limit=3),
+        _get_product_scans(user_id, limit=20),
         _get_subscription_status(user_id),
         _get_scan_progress(user_id),
+        _get_scalp_progress(user_id),
+        _get_scan_history(user_id, face_limit=5, scalp_limit=5),
     )
 
     profile_score = _compute_profile_score(profile)
 
+    # Fetch nutrition recommendations based on detected conditions
+    detected_conditions = []
+    for scan in (face_scan, scalp_scan):
+        if scan:
+            analysis = scan.get("analysis", {})
+            for cond in analysis.get("detected_condition", []):
+                if isinstance(cond, dict) and cond.get("name"):
+                    detected_conditions.append(cond["name"])
+
+    # Unique conditions, keeping order
+    seen = set()
+    unique_conditions = []
+    for c in detected_conditions:
+        if c not in seen:
+            seen.add(c)
+            unique_conditions.append(c)
+
+    nutritions, foods, recipes = await _get_nutrition_recommendations(unique_conditions)
+
     # ── 4. Build enriched system prompt ──────────────────────────────────────
     system = _build_system_prompt(
-        profile       = profile,
-        memories      = memories,
-        face_scan     = face_scan,
-        scalp_scan    = scalp_scan,
-        routine       = routine,
-        product_scans = product_scans,
-        profile_score = profile_score,
-        subscription  = subscription,
-        scan_progress = scan_progress,
+        profile        = profile,
+        memories       = memories,
+        face_scan      = face_scan,
+        scalp_scan     = scalp_scan,
+        routine        = routine,
+        product_scans  = product_scans,
+        profile_score  = profile_score,
+        subscription   = subscription,
+        scan_progress  = scan_progress,
+        scalp_progress = scalp_progress,
+        face_history   = face_history,
+        scalp_history  = scalp_history,
+        nutritions     = nutritions,
+        foods          = foods,
+        recipes        = recipes,
     )
 
     # ── 5. Collect the full reply and return as JSON ──────────────────────────
