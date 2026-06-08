@@ -53,8 +53,14 @@ def _draft_row(
 
     why: str,
 
+    price: float = None,
+
     scan_id: str = None
 ):
+
+    if price is None:
+        from app.utils.price_helper import get_or_generate_price
+        price = get_or_generate_price(product_name, product_category)
 
     return {
         "routine_id": routine_id,
@@ -67,6 +73,7 @@ def _draft_row(
         "product_name": product_name,
         "product_url": product_url,
         "why": why,
+        "price": price,
         "created_at": datetime.utcnow()
     }
 
@@ -156,6 +163,7 @@ def register_grouped_routine_drafts(
                     ) or step.get(
                         "usage_reason"
                     ),
+                    price=step.get("price"),
                     scan_id=scan_id
                 )
             )
@@ -227,6 +235,7 @@ def register_product_routine_drafts(
                 ) or step.get(
                     "why"
                 ),
+                price=step.get("price"),
                 scan_id=scan_id
             )
         )

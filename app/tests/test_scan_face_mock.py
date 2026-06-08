@@ -157,13 +157,14 @@ async def run_tests_async():
         assert analysis["visible_area"]["image_url"] is not None
         assert "scan_overlays" in analysis["visible_area"]["image_url"]
         
-        # Verify detected conditions have image_url containing S3 paths
+        # Verify detected conditions have image_url containing S3 paths and phase field
         cond = analysis["detected_condition"][0]
         assert cond["name"] == "acne"
         assert cond["regions"][0]["x"] == 0.42
         assert cond["image_url"] is not None
         assert "scan_overlays" in cond["image_url"]
-        print("[PASS] Scan response correctly contains overlays S3 URLs and region coordinates.")
+        assert cond["phase"] == "Good"
+        print("[PASS] Scan response correctly contains overlays S3 URLs, region coordinates, and phase field.")
 
         # Verify model_scores field exists
         assert "model_scores" in analysis, "Response missing model_scores"
@@ -174,11 +175,12 @@ async def run_tests_async():
         assert ms.get("elasticity") == 78.3
         print("[PASS] model_scores field present with correct local ML scores.")
 
-        # Verify blackheads condition also got overlay
+        # Verify blackheads condition also got overlay and phase
         blackhead_cond = analysis["detected_condition"][1]
         assert blackhead_cond["name"] == "blackheads"
         assert blackhead_cond.get("image_url") is not None
-        print("[PASS] Blackheads condition received lesion detector overlay.")
+        assert blackhead_cond["phase"] == "Good"
+        print("[PASS] Blackheads condition received lesion detector overlay and correct phase.")
 
         # 3. Test Database storage update
         db_doc = scan_results_col.find_one({"_id": ObjectId(scan_id)})

@@ -17,8 +17,12 @@ from app.routers.auth import (
 
 from app.services.routine_draft_service import (
     get_routine_drafts_by_ids,
-    missing_routine_ids
+    missing_routine_ids,
 )
+from app.services.product_service import fetch_product_by_name
+from typing import List
+
+from app.utils.price_helper import get_or_generate_price
 
 
 router = APIRouter(
@@ -102,6 +106,13 @@ class StepCompleteRequest(BaseModel):
     is_completed: Optional[bool] = None
 
 
+class UpdatePriceRequest(BaseModel):
+    price: float = Field(..., ge=0, description="New price of the product")
+
+
+
+
+
 
 # =========================
 # SAVE GENERATED ROUTINE STEPS
@@ -142,6 +153,9 @@ async def save_routine(
         rows = []
 
         for draft in drafts:
+            p_name = draft.get("product_name")
+            p_cat = draft.get("product_category")
+            price = draft.get("price") if draft.get("price") is not None else get_or_generate_price(p_name, p_cat)
 
             rows.append({
                 "id": draft["routine_id"],
@@ -155,18 +169,16 @@ async def save_routine(
                 "phase": draft.get(
                     "phase"
                 ),
-                "product_category": draft.get(
-                    "product_category"
-                ),
-                "product_name": draft.get(
-                    "product_name"
-                ),
+                "product_category": p_cat,
+                "product_name": p_name,
                 "product_url": draft.get(
                     "product_url"
                 ),
                 "why": draft.get(
                     "why"
                 ),
+                "price": price,
+                "ingredients": [] ,
                 "is_completed": False,
                 "completed_at": None
             })
@@ -336,6 +348,9 @@ async def delete_routine_step(
 # GET ALL SAVED ROUTINES
 # =========================
 
+class UpdateIngredientsRequest(BaseModel):
+    ingredients: List[str] = Field(..., description="List of ingredient strings")
+
 @router.get("/all")
 async def get_all_saved_routines(
     current_user: CurrentUser,
@@ -361,12 +376,24 @@ async def get_all_saved_routines(
 
         data = _reset_stale_weekly_steps(rows)
 
+        total_price = 0.0
+        user_steps = saved_routines_collection.find({"user_id": user_id}, {"price": 1})
+        for step in user_steps:
+            price_val = step.get("price")
+            if price_val is not None:
+                try:
+                    total_price += float(price_val)
+                except (ValueError, TypeError):
+                    pass
+        total_price = round(total_price, 2)
+
         return {
             "success": True,
             "total": total,
             "limit": limit,
             "offset": offset,
             "count": len(data),
+            "total_price": total_price,
             "data": data
         }
 
@@ -377,4 +404,100 @@ async def get_all_saved_routines(
         raise HTTPException(
             status_code=500,
             detail="Failed to fetch saved routines"
+        )
+
+
+# =========================
+# UPDATE STEP PRICE MANUALLY
+# =========================
+
+@router.patch("/step/{step_id}/price")
+async def update_step_price(
+    step_id: str,
+    body: UpdatePriceRequest,
+    current_user: CurrentUser
+):
+    try:
+        user_id = str(current_user["_id"])
+
+        # Verify the step exists and belongs to the current user
+        existing_step = saved_routines_collection.find_one(
+            {"id": step_id, "user_id": user_id}
+        )
+        if not existing_step:
+            raise HTTPException(
+                status_code=404,
+                detail="Routine step not found or does not belong to this user"
+            )
+
+        saved_routines_collection.update_one(
+            {"id": step_id, "user_id": user_id},
+            {"$set": {"price": body.price}}
+        )
+
+        updated_step = saved_routines_collection.find_one(
+            {"id": step_id, "user_id": user_id},
+            {"_id": 0}
+        )
+
+        return {
+            "success": True,
+            "step_id": step_id,
+            "price": body.price,
+            "data": updated_step
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("UPDATE STEP PRICE ERROR:", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update step price"
+        )
+
+# =========================
+# UPDATE STEP INGREDIENTS MANUALLY
+# =========================
+
+@router.patch("/step/{step_id}/ingredients")
+async def update_step_ingredients(
+    step_id: str,
+    body: UpdateIngredientsRequest,
+    current_user: CurrentUser,
+):
+    try:
+        user_id = str(current_user["_id"])
+
+        # Verify the step exists and belongs to the current user
+        existing_step = saved_routines_collection.find_one(
+            {"id": step_id, "user_id": user_id}
+        )
+        if not existing_step:
+            raise HTTPException(
+                status_code=404,
+                detail="Routine step not found or does not belong to this user",
+            )
+
+        saved_routines_collection.update_one(
+            {"id": step_id, "user_id": user_id},
+            {"$set": {"ingredients": body.ingredients}}
+        )
+
+        updated_step = saved_routines_collection.find_one(
+            {"id": step_id, "user_id": user_id}, {"_id": 0}
+        )
+
+        return {
+            "success": True,
+            "step_id": step_id,
+            "ingredients": body.ingredients,
+            "data": updated_step,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("UPDATE STEP INGREDIENTS ERROR:", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update step ingredients",
         )

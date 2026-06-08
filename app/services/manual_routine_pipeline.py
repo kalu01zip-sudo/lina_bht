@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from app.core.mongo_client import saved_routines_collection
+from app.utils.price_helper import get_or_generate_price
 
 from app.services.generate_manual_routine_ai import (
     generate_manual_routine_ai
@@ -240,6 +241,8 @@ def save_simple_manual_routine(
         time=time
     )
 
+    price = get_or_generate_price(manual_product["name"], manual_product["category"])
+
     row = {
         "id": new_routine_id(),
         "user_id": user_id,
@@ -251,6 +254,7 @@ def save_simple_manual_routine(
         "product_url": manual_product.get(
             "product_url"
         ),
+        "price": price,
         "why": manual_product["instruction"]
     }
 
@@ -418,6 +422,8 @@ def inject_products(
                 else None
             )
 
+        price = get_or_generate_price(product_name, category)
+
         enhanced_steps.append({
 
             "step":
@@ -440,6 +446,9 @@ def inject_products(
 
             "product_category":
                 category,
+
+            "price":
+                price,
 
             "usage_reason":
                 step.get(

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from typing import Annotated, List
 from app.services.face_validation import validate_image
-from app.services.face_ai import analyze_face_with_claude, verify_same_person
+from app.services.face_ai import analyze_face_with_claude, verify_same_person, _assign_condition_phases
 import json
 import asyncio
 from app.core.mapping import extract_nutrition
@@ -235,6 +235,9 @@ async def upload_face_images(
 
     # Attach raw model scores for transparency
     ai_data["model_scores"] = model_scores
+
+    # Assign/reassign phase field based on final blended checked_area scores
+    ai_data = _assign_condition_phases(ai_data)
 
     # Extract detected conditions from Claude response
     detected_condition_names = []

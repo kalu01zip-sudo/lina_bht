@@ -12,6 +12,7 @@ Fixes applied:
 
 import uuid
 from app.services.product_matcher import match_product
+from app.utils.price_helper import get_or_generate_price
 
 
 def _normalise(category: str | None) -> str:
@@ -67,12 +68,17 @@ def build_routine(
             phase   = step.get("phase", "maintenance")
             product = match_product(category, focus) if category else None
 
+            p_name = product.get("name") if product else None
+            p_cat = step.get("product_category")
+            price = get_or_generate_price(p_name, p_cat)
+
             result.append({
                 "id":               str(uuid.uuid4()),
                 "phase":            phase,
-                "product_category": step.get("product_category"),   # keep original casing
-                "product_name":     product.get("name")      if product else None,
+                "product_category": p_cat,   # keep original casing
+                "product_name":     p_name,
                 "product_url":      product.get("image_url") if product else None,
+                "price":            price,
                 "why":              f"Targets {focus} and supports skin balance effectively.",
             })
 

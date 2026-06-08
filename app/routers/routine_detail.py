@@ -12,6 +12,14 @@ from app.services.saved_routine_service import (
     fetch_saved_routine
 )
 
+from app.services.generate_ingredients_ai import (
+    generate_ingredients_ai
+)
+
+from app.core.mongo_client import (
+    saved_routines_collection
+)
+
 from app.services.video_service import (
     fetch_best_video
 )
@@ -42,6 +50,8 @@ router = APIRouter(
     prefix="/routine",
     tags=["Routine"]
 )
+
+from app.utils.price_helper import get_or_generate_price
 
 
 @router.get("/details/{routine_id}")
@@ -74,6 +84,26 @@ async def get_routine_detail(
     # security
     if routine["user_id"] != str(current_user["_id"]):
         raise HTTPException(403, "Unauthorized")
+
+    # =========================
+    # INGREDIENTS (AI on first call, DB from second call)
+    # =========================
+
+    existing_ingredients = routine.get("ingredients", [])
+
+    if not existing_ingredients:
+        # First time — generate via AI and persist
+        ai_ingredients = await generate_ingredients_ai(
+            product_name=routine.get("product_name", ""),
+            product_category=routine.get("product_category", "")
+        )
+
+        if ai_ingredients:
+            saved_routines_collection.update_one(
+                {"id": routine_id},
+                {"$set": {"ingredients": ai_ingredients}}
+            )
+            routine["ingredients"] = ai_ingredients
 
     # =========================
     # VIDEO
@@ -132,7 +162,11 @@ async def get_routine_detail(
 
             "category": routine["product_category"],
 
-            "name": routine["product_name"]
+            "name": routine["product_name"],
+
+            "ingredients": routine.get("ingredients", []),
+
+            "price": routine.get("price") if routine.get("price") is not None else get_or_generate_price(routine.get("product_name"), routine.get("product_category"))
         },
 
         "text": ai_data["text"],

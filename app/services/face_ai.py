@@ -379,6 +379,9 @@ HARD CONSTRAINTS:
                 cond["regions"] = _parse_regions(cond.get("regions", []))
                 cond["image_url"] = None
 
+        # Add phase field to each detected_condition
+        result = _assign_condition_phases(result)
+
         # Parse and populate regions/image_url for visible area
         va = result.get("visible_area")
         if isinstance(va, dict):
@@ -474,6 +477,105 @@ def _enforce_score_consistency(data: dict) -> dict:
 
     return data
 
+
+# ── Phase assignment ──────────────────────────────────────────────────────────
+
+# Severity → phase fallback (when no score is available in checked_area)
+_SEVERITY_TO_PHASE = {
+    "Severe":   "Needs care",
+    "Moderate": "Average",
+    "Mild":     "Good",
+}
+
+
+def _score_to_phase(score: int) -> str:
+    """Map a 0-100 health score to a human-readable phase label."""
+    if score <= 30:
+        return "Needs care"
+    if score <= 50:
+        return "Average"
+    if score <= 70:
+        return "Good"
+    return "Very Well"
+
+
+# Mappings to reconcile detected_condition name and checked_area keys
+_CONDITION_TO_CHECKED_AREA_KEYS = {
+    "acne": ["acne"],
+    "blackheads": ["blackheads"],
+    "whiteheads": ["whiteheads"],
+    "sebum": ["sebum"],
+    "oiliness": ["sebum"],
+    "dryness": ["dryness"],
+    "dehydration": ["dryness", "hydration"],
+    "redness": ["redness"],
+    "irritation": ["redness"],
+    "inflammation": ["redness"],
+    "pigmentation": ["pigmentation"],
+    "hyperpigmentation": ["pigmentation"],
+    "dark_spots": ["pigmentation"],
+    "sun_spots": ["pigmentation"],
+    "freckles": ["pigmentation"],
+    "melasma": ["pigmentation"],
+    "wrinkles": ["wrinkles"],
+    "fine_lines": ["wrinkles"],
+    "crow_feet": ["wrinkles"],
+    "pores": ["pore_size", "pores"],
+    "pore_size": ["pore_size", "pores"],
+    "enlarged_pores": ["pore_size", "pores"],
+    "dark_circles": ["dark_circles"],
+    "skin_tone": ["skin_tone"],
+    "radiance": ["radiance"],
+    "dullness": ["radiance", "skin_tone"],
+    "evenness": ["evenness"],
+    "texture": ["texture"],
+    "elasticity": ["elasticity"],
+    "firmness": ["firmness"],
+    "sagging": ["sagging"],
+}
+
+
+def _assign_condition_phases(data: dict) -> dict:
+    """
+    Add a `phase` field to every item in `detected_condition`.
+
+    Strategy (no AI call — pure logic):
+      1. Look up the condition name in `checked_area`. If a matching score
+         exists, convert the 0-100 health score to a phase label.
+      2. Otherwise fall back to the severity field:
+         Severe → "Needs care", Moderate → "Average", Mild → "Good".
+    """
+    checked_area = data.get("checked_area", {})
+
+    for cond in data.get("detected_condition", []):
+        if not isinstance(cond, dict):
+            continue
+
+        cond_name = cond.get("name", "").strip().lower().replace(" ", "_")
+        severity = cond.get("severity", "Moderate")
+
+        # Try to find a matching score in checked_area
+        score = None
+        # Try direct lookup
+        if cond_name in checked_area:
+            score = checked_area[cond_name]
+        else:
+            # Try mapping lookup
+            mapped_keys = _CONDITION_TO_CHECKED_AREA_KEYS.get(cond_name, [])
+            for k in mapped_keys:
+                if k in checked_area:
+                    score = checked_area[k]
+                    break
+
+        if score is not None:
+            try:
+                cond["phase"] = _score_to_phase(int(score))
+            except (TypeError, ValueError):
+                cond["phase"] = _SEVERITY_TO_PHASE.get(severity, "Average")
+        else:
+            cond["phase"] = _SEVERITY_TO_PHASE.get(severity, "Average")
+
+    return data
 
 # ── Identity verifier ─────────────────────────────────────────────────────────
 

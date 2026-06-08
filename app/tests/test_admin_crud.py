@@ -191,7 +191,6 @@ def run_tests():
 
     # 4. PRODUCT CRUD TEST
     print("\n--- Testing PRODUCT CRUD ---")
-    prod_id = f"test_prod_{uuid.uuid4().hex[:6]}"
     
     # POST
     dummy_image = get_dummy_image()
@@ -199,28 +198,33 @@ def run_tests():
     post_res = client.post(
         "/admin/product",
         data={
-            "id": prod_id,
             "name": "Test Product",
-            "category": "Serum",
-            "tags": "moisturizer,barrier",
-            "concerns": "dryness,redness",
-            "priority": 5
+            "categories": "Serum, Moisturizer",
+            "detected_conditions": "acne, dryness",
+            "price": 14.99
         },
         files={"file": ("product.png", dummy_image, "image/png")}
     )
-    assert post_res.status_code == 200
+    assert post_res.status_code == 201, f"Product upload failed: {post_res.text}"
+    prod_data = post_res.json()
+    prod_id = prod_data["id"]
+    assert prod_data["price"] == 14.99
     print("[PASS] POST /admin/product")
 
     # GET List
     get_res = client.get("/admin/product")
     assert get_res.status_code == 200
-    assert any(x["id"] == prod_id for x in get_res.json())
+    list_data = get_res.json()
+    assert "items" in list_data
+    assert any(x["id"] == prod_id for x in list_data["items"])
     print("[PASS] GET /admin/product (List)")
 
     # GET Single
     get_single_res = client.get(f"/admin/product/{prod_id}")
     assert get_single_res.status_code == 200
-    assert get_single_res.json()["name"] == "Test Product"
+    single_data = get_single_res.json()
+    assert single_data["name"] == "Test Product"
+    assert single_data["price"] == 14.99
     print("[PASS] GET /admin/product/{id}")
 
     # PUT Update
@@ -230,15 +234,16 @@ def run_tests():
         f"/admin/product/{prod_id}",
         data={
             "name": "Updated Product Name",
-            "category": "Cleanser",
-            "priority": 12
+            "categories": "Cleanser",
+            "price": 18.50
         },
         files={"file": ("product_upd.png", dummy_image2, "image/png")}
     )
-    assert put_res.status_code == 200
-    assert put_res.json()["data"]["name"] == "Updated Product Name"
-    assert put_res.json()["data"]["category"] == "cleanser"
-    assert put_res.json()["data"]["priority"] == 12
+    assert put_res.status_code == 200, f"Product update failed: {put_res.text}"
+    updated_data = put_res.json()["data"]
+    assert updated_data["name"] == "Updated Product Name"
+    assert "cleanser" in updated_data["categories"]
+    assert updated_data["price"] == 18.50
     print("[PASS] PUT /admin/product/{id}")
 
     # DELETE

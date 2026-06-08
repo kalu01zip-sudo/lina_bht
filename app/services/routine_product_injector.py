@@ -1,6 +1,7 @@
 from app.services.product_ranker import (
     fetch_best_product
 )
+from app.utils.price_helper import get_or_generate_price
 
 # ==========================================
 # INJECT REAL PRODUCTS
@@ -40,6 +41,9 @@ def inject_products_into_routine(
                 )
         )
 
+        p_name = product.get("name") if product else None
+        price = get_or_generate_price(p_name, category)
+
         enhanced_steps.append({
 
             "step":
@@ -57,8 +61,7 @@ def inject_products_into_routine(
                 if product else None,
 
             "product_name":
-                product.get("name")
-                if product else None,
+                p_name,
 
             "product_url":
                 product.get("image_url")
@@ -66,6 +69,9 @@ def inject_products_into_routine(
 
             "product_category":
                 category,
+
+            "price":
+                price,
 
             "usage_reason":
                 step.get(
