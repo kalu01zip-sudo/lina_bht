@@ -507,6 +507,23 @@ async def _get_nutrition_recommendations(
         return [], [], []
 
 
+async def _get_latest_cached_routine_check(user_id: str) -> dict | None:
+    """
+    Fetch the most recently stored routine-check result from
+    `db.routine_check_cache` for this user, or None if no cache entry exists.
+    """
+    db = get_db()
+    try:
+        doc = await db.routine_check_cache.find_one(
+            {"user_id": str(user_id)},
+            sort=[("cached_at", -1)],
+        )
+        return doc
+    except Exception as exc:
+        logger.warning("Routine check cache fetch failed for user %s: %s", user_id, exc)
+        return None
+
+
 async def _load_history(user_id: str, limit: int = 20) -> list[dict]:
     """Load last N chat messages as role/content dicts for LLM context."""
     db = get_db()
@@ -969,6 +986,94 @@ def _format_routine_ingredients_context(
     return "\n".join(lines)
 
 
+def _format_routine_check_context(check: dict | None) -> str:
+    """
+    Serialize the cached routine-check result into a compact prompt block so
+    Gixy can discuss conflicts, allergy hits, pregnancy warnings, and budget.
+
+    Expected structure (from GET /routine/check):
+      {
+        "conflicts":    [{"products": [...], "reason": str, "severity": str, "suggestion": str}],
+        "allergy_hits": [{"product": str, "allergen": str, "severity": str, "suggestion": str}],
+        "pregnancy_warnings": [{"product": str, "ingredient": str, "risk_level": str, "suggestion": str}],
+        "budget_analysis": {"tier": str, "estimated_monthly_cost": num, "summary": str},
+        "overall_safety_score": int,
+        "summary": str,
+      }
+    """
+    if not check:
+        return ""
+
+    # The cache document wraps the result inside a `result` key.
+    data = check.get("result") or check
+
+    conflicts          = data.get("conflicts")          or []
+    allergy_hits       = data.get("allergy_hits")       or []
+    pregnancy_warnings = data.get("pregnancy_warnings") or []
+    budget             = data.get("budget_analysis")    or {}
+    safety_score       = data.get("overall_safety_score")
+    summary            = data.get("summary",            "")
+
+    # Nothing meaningful to show
+    if not (conflicts or allergy_hits or pregnancy_warnings or budget or summary):
+        return ""
+
+    lines: list[str] = [
+        "── ROUTINE SAFETY CHECK (latest AI analysis) ────────────────────",
+    ]
+
+    if safety_score is not None:
+        lines.append(f"  Overall safety score : {safety_score}/100")
+
+    if summary:
+        lines.append(f"  Summary : {summary}")
+
+    if conflicts:
+        lines.append("  Ingredient conflicts:")
+        for c in conflicts:
+            prods     = ", ".join(c.get("products") or [])
+            reason    = c.get("reason",     "")
+            severity  = c.get("severity",   "")
+            suggest   = c.get("suggestion", "")
+            lines.append(f"    ⚡ [{severity}] {prods}: {reason}")
+            if suggest:
+                lines.append(f"       → {suggest}")
+
+    if allergy_hits:
+        lines.append("  Allergy alerts:")
+        for a in allergy_hits:
+            product  = a.get("product",    "")
+            allergen = a.get("allergen",   "")
+            severity = a.get("severity",   "")
+            suggest  = a.get("suggestion", "")
+            lines.append(f"    🚨 [{severity}] {product} contains {allergen}")
+            if suggest:
+                lines.append(f"       → {suggest}")
+
+    if pregnancy_warnings:
+        lines.append("  Pregnancy warnings:")
+        for p in pregnancy_warnings:
+            product    = p.get("product",    "")
+            ingredient = p.get("ingredient", "")
+            risk       = p.get("risk_level", "")
+            suggest    = p.get("suggestion", "")
+            lines.append(f"    🤰 [{risk}] {product} — {ingredient}")
+            if suggest:
+                lines.append(f"       → {suggest}")
+
+    if budget:
+        tier     = budget.get("tier",                    "")
+        cost     = budget.get("estimated_monthly_cost")
+        b_summary = budget.get("summary",                "")
+        cost_str = f"~${cost}/mo" if cost is not None else ""
+        lines.append(f"  Budget analysis : {tier} {cost_str}")
+        if b_summary:
+            lines.append(f"    {b_summary}")
+
+    lines.append("─────────────────────────────────────────────────────────────────")
+    return "\n".join(lines)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  SYSTEM PROMPT BUILDER
 # ══════════════════════════════════════════════════════════════════════════════
@@ -989,6 +1094,7 @@ def _build_system_prompt(
     nutritions:          list[dict] = None,
     foods:               list[dict] = None,
     recipes:             list[dict] = None,
+    routine_check:       dict | None = None,
 ) -> str:
     """
     Builds Gixy's system prompt across nine layers:
@@ -1212,6 +1318,17 @@ wellness, politely redirect.
             "\n" + scalp_progress_ctx + "\n"
             "Reference this scalp scan progress to motivate the user on their hair "
             "and scalp health journey.\n"
+        )
+
+    # ── Layer 10 — Routine safety check ──────────────────────────────────────
+    routine_check_ctx = _format_routine_check_context(routine_check)
+    if routine_check_ctx:
+        base += (
+            "\n" + routine_check_ctx + "\n"
+            "When the user asks about their routine safety, ingredient conflicts, "
+            "allergy concerns, pregnancy-safe products, or budget, use the data "
+            "above to give precise, personalised answers. Offer actionable "
+            "suggestions from the 'suggestion' fields.\n"
         )
 
     return base
@@ -1543,6 +1660,7 @@ async def send_message(
         scan_progress,
         scalp_progress,
         (face_history, scalp_history),
+        routine_check,
     ) = await asyncio.gather(
         _get_user_profile(user_id),
         _get_user_memories(user_id),
@@ -1554,6 +1672,7 @@ async def send_message(
         _get_scan_progress(user_id),
         _get_scalp_progress(user_id),
         _get_scan_history(user_id, face_limit=5, scalp_limit=5),
+        _get_latest_cached_routine_check(user_id),
     )
 
     profile_score = _compute_profile_score(profile)
@@ -1594,6 +1713,7 @@ async def send_message(
         nutritions     = nutritions,
         foods          = foods,
         recipes        = recipes,
+        routine_check  = routine_check,
     )
 
     # ── 5. Stream the reply ───────────────────────────────────────────────────
@@ -1663,6 +1783,7 @@ async def send_message_sync(
         scan_progress,
         scalp_progress,
         (face_history, scalp_history),
+        routine_check,
     ) = await asyncio.gather(
         _get_user_profile(user_id),
         _get_user_memories(user_id),
@@ -1674,6 +1795,7 @@ async def send_message_sync(
         _get_scan_progress(user_id),
         _get_scalp_progress(user_id),
         _get_scan_history(user_id, face_limit=5, scalp_limit=5),
+        _get_latest_cached_routine_check(user_id),
     )
 
     profile_score = _compute_profile_score(profile)
@@ -1714,6 +1836,7 @@ async def send_message_sync(
         nutritions     = nutritions,
         foods          = foods,
         recipes        = recipes,
+        routine_check  = routine_check,
     )
 
     # ── 5. Collect the full reply and return as JSON ──────────────────────────
