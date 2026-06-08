@@ -17,8 +17,16 @@ from app.services.generate_ingredients_ai import (
 )
 
 from app.core.mongo_client import (
-    saved_routines_collection
+    saved_routines_collection,
+    scan_collection,
+    scalp_scan_collection,
+    nutritions_collection,
+    foods_collection,
+    recipes_collection
 )
+
+from bson import ObjectId
+from app.core.recommender import smart_rank
 
 from app.services.video_service import (
     fetch_best_video
@@ -33,17 +41,7 @@ from app.services.routine_detail_cache import (
     save_cached_routine_detail
 )
 
-from app.services.nutrition_service import (
-    fetch_nutritions
-)
-
-from app.services.food_service import (
-    fetch_foods_by_tags
-)
-
-from app.services.recipe_service import (
-    fetch_recipes_by_tags
-)
+# Recommendation fetching migrated to direct MongoDB queries by detected condition
 
 
 router = APIRouter(
@@ -115,28 +113,129 @@ async def get_routine_detail(
     )
 
     # =========================
-    # NUTRITION IDS
+    # RECONSTRUCT DETECTED CONDITIONS
     # =========================
 
-    product = fetch_product_by_name(
-        routine["product_name"]
-    )
+    detected_condition_names = []
+    scan_analysis = {}
 
-    nutrition_ids = []
+    scan_id = routine.get("scan_id")
+    user_id = routine.get("user_id") or str(current_user["_id"])
+    scan_doc = None
 
-    if product:
+    if scan_id:
+        try:
+            scan_doc = scan_collection.find_one({"_id": ObjectId(scan_id)})
+            if not scan_doc:
+                scan_doc = scalp_scan_collection.find_one({"_id": ObjectId(scan_id)})
+        except Exception:
+            pass
 
-        nutrition_ids = product.get("tags", [])
+    # Fallback 1: Latest user scan
+    if not scan_doc:
+        try:
+            latest_face = scan_collection.find_one(
+                {"user_id": user_id},
+                sort=[("created_at", -1)]
+            )
+            latest_scalp = scalp_scan_collection.find_one(
+                {"user_id": user_id},
+                sort=[("created_at", -1)]
+            )
+            if latest_face and latest_scalp:
+                face_time = latest_face.get("created_at")
+                scalp_time = latest_scalp.get("created_at")
+                scan_doc = latest_face if face_time > scalp_time else latest_scalp
+            else:
+                scan_doc = latest_face or latest_scalp
+        except Exception:
+            pass
+
+    if scan_doc:
+        scan_analysis = scan_doc.get("analysis", {})
+        for c in scan_analysis.get("detected_condition", []):
+            if isinstance(c, dict):
+                cname = c.get("name")
+            else:
+                cname = str(c)
+            if cname:
+                detected_condition_names.append(cname.strip().lower().replace(" ", "_"))
+
+    # Fallback 2: Onboarding profile concerns
+    if not detected_condition_names:
+        skin_concerns = current_user.get("skin_concerns") or []
+        hair_concerns = current_user.get("hair_concerns") or []
+        for concern in skin_concerns + hair_concerns:
+            if concern:
+                detected_condition_names.append(concern.strip().lower().replace(" ", "_"))
+
+    # Fallback 3: Product tags
+    if not detected_condition_names:
+        try:
+            product = fetch_product_by_name(routine.get("product_name", ""))
+            if product:
+                for tag in product.get("tags") or []:
+                    if tag:
+                        detected_condition_names.append(tag.strip().lower().replace(" ", "_"))
+        except Exception:
+            pass
 
     # =========================
-    # FETCH DATA
+    # FETCH DATA BY CONDITION
     # =========================
 
-    nutritions = fetch_nutritions(nutrition_ids)
+    nutritions = []
+    foods = []
+    recipes = []
 
-    foods = fetch_foods_by_tags(nutrition_ids)
+    if detected_condition_names:
+        try:
+            # Fetch nutritions matching detected conditions
+            nutrition_cursor = nutritions_collection.find({"detected_condition": {"$in": detected_condition_names}})
+            for doc in nutrition_cursor:
+                doc["_id"] = str(doc["_id"])
+                nutritions.append(doc)
 
-    recipes = fetch_recipes_by_tags(nutrition_ids)
+            nutrition_ids = [n["id"] for n in nutritions]
+
+            # Fetch foods matching detected conditions
+            food_cursor = foods_collection.find({"detected_condition": {"$in": detected_condition_names}})
+            raw_foods = []
+            for doc in food_cursor:
+                doc["_id"] = str(doc["_id"])
+                raw_foods.append(doc)
+
+            # Fetch recipes matching detected conditions
+            recipe_cursor = recipes_collection.find({"detected_condition": {"$in": detected_condition_names}})
+            raw_recipes = []
+            for doc in recipe_cursor:
+                doc["_id"] = str(doc["_id"])
+                raw_recipes.append(doc)
+
+            # Smart rank based on context
+            foods = smart_rank(raw_foods, nutrition_ids, scan_analysis)
+            recipes = smart_rank(raw_recipes, nutrition_ids, scan_analysis)
+
+            # User profile allergy filtering
+            allergies = [a.lower().strip() for a in current_user.get("allergies") or [] if a]
+            if allergies:
+                filtered_foods = []
+                for item in foods:
+                    ingredients = [i.lower() for i in item.get("ingredients") or []]
+                    name_lower = item.get("name", "").lower()
+                    if not any(allergen in ingredients or allergen in name_lower for allergen in allergies):
+                        filtered_foods.append(item)
+                foods = filtered_foods
+
+                filtered_recipes = []
+                for item in recipes:
+                    ingredients = [i.lower() for i in item.get("main_ingredients") or []]
+                    name_lower = item.get("name", "").lower()
+                    if not any(allergen in ingredients or allergen in name_lower for allergen in allergies):
+                        filtered_recipes.append(item)
+                recipes = filtered_recipes
+        except Exception as e:
+            print("[ERROR] Recommendation mapping failed:", e)
 
     # =========================
     # AI CONTENT
@@ -175,11 +274,11 @@ async def get_routine_detail(
 
         "what_you_learn": ai_data["what_you_learn"],
 
-        "key_nutrients": nutritions,
+        "nutritions": nutritions,
 
-        "food_recommendation": foods,
+        "foods": foods,
 
-        "recipe_recommendation": recipes
+        "recipes": recipes
     }
 
     # =========================

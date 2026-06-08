@@ -129,6 +129,7 @@ def _build_penalty_table_text() -> str:
 async def analyze_face_with_claude(
     images: list[bytes],
     allowed_conditions: list[str] | None = None,
+    yolo_hints: list[str] | None = None,
 ) -> dict:
     """
     Analyse up to 5 face images with Claude vision.
@@ -228,6 +229,15 @@ REGION COORDINATE RULES
 • If a condition is not localisable, return an empty regions array [].
 """
 
+    # ── Build YOLO context hint (if provided) ────────────────────────────────
+    yolo_context = ""
+    if yolo_hints:
+        yolo_context = (
+            f"\n\n⚠️ LOCAL MODEL PRE-SCAN RESULTS (high confidence — include these in detected_condition):\n"
+            + "\n".join(f"  • {h}" for h in yolo_hints)
+            + "\n\nYou MUST include any condition listed above in your detected_condition output if visually confirmable."
+        )
+
     # ── User prompt ───────────────────────────────────────────────────────────
     schema_template = """\
 Analyse all provided face images carefully using every angle. Observe: acne, \
@@ -235,96 +245,89 @@ blackheads, whiteheads, oiliness, dryness, redness, pigmentation, dark spots, \
 fine lines, wrinkles, pore size, skin texture, tone evenness, hydration level, \
 under-eye area, and overall skin radiance.
 
+CRITICAL ANTI-BIAS RULES:
+- Do NOT default to 'redness', 'pigmentation', or 'dark_circles' unless clearly, \
+unambiguously visible in the images.
+- 'redness' = visible erythema or flushing. Skin tone variation alone is NOT redness.
+- 'pigmentation' = visible dark spots or uneven tone patches. General skin tone is NOT pigmentation.
+- 'dark_circles' = visible under-eye discoloration. Only include if clearly observable.
+- Pick conditions that are CLINICALLY SPECIFIC and VISIBLE. Be precise, not generic.
+
 Follow these steps:
-STEP 1 — OBSERVE what is visible across all images with clinical precision.
-STEP 2 — CLASSIFY: pick exactly 3 conditions from the allowed list.
+STEP 1 — OBSERVE what is clinically visible across all images with precision.
+STEP 2 — CLASSIFY: pick 2 to 5 conditions ACTUALLY VISIBLE in the images.
+          - Minimum 2, maximum 5. Do NOT pad the list to hit a number.
+          - Only include conditions you can specifically justify with visual evidence.
 STEP 3 — SCORE: apply the PENALTY TABLE to compute overall_score.
 STEP 4 — OUTPUT only this JSON (replace placeholder values):
+{yolo_context}
 
-{
+{{
   "overall_score": <integer computed from penalty table>,
 
-  "checked_area": {
+  "checked_area": {{
     "<area_name_1>": <health_score>,
     "<area_name_2>": <health_score>,
     "<area_name_3>": <health_score>,
     "<area_name_4>": <health_score>,
     "<area_name_5>": <health_score>
-  },
+  }},
 
-  "visible_area": {
+  "visible_area": {{
     "condition": "<one of: acne|pimple|redness|irritation|pigmentation|dullness>",
     "areas": ["<one or more of: cheeks|nose|forehead|chin|under_eye>"],
     "score": <health_score>,
     "regions": [
-      { "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }
+      {{ "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }}
     ]
-  },
+  }},
 
   "hydration": <0-100>,
 
   "detected_condition": [
-    {
+    {{
       "name": "<condition_name_from_allowed_list>",
       "note": "<exactly 10-12 word clinical note>",
       "severity": "<Mild|Moderate|Severe>",
       "regions": [
-        { "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }
+        {{ "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }}
       ]
-    },
-    {
-      "name": "<condition_name_from_allowed_list>",
-      "note": "<exactly 10-12 word clinical note>",
-      "severity": "<Mild|Moderate|Severe>",
-      "regions": [
-        { "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }
-      ]
-    },
-    {
-      "name": "<condition_name_from_allowed_list>",
-      "note": "<exactly 10-12 word clinical note>",
-      "severity": "<Mild|Moderate|Severe>",
-      "regions": [
-        { "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }
-      ]
-    }
+    }}
   ],
 
-  "lifestyle_factor": {
+  "lifestyle_factor": {{
     "stress_score": <0-100>,
     "water_intake": <0-100>,
     "sleep_quality": <0-100>
-  },
+  }},
 
-  "prognosis_timeline": {
-    "seven_days": {
+  "prognosis_timeline": {{
+    "seven_days": {{
       "<checked_area_key>": <expected_score_delta>,
       "<checked_area_key>": <expected_score_delta>
-    },
-    "fourteen_days": {
+    }},
+    "fourteen_days": {{
       "<checked_area_key>": <expected_score_delta>,
       "<checked_area_key>": <expected_score_delta>
-    }
-  },
+    }}
+  }},
 
   "hydration_target": <recommended_daily_ml>,
 
-  "score_breakdown": {
+  "score_breakdown": {{
     "baseline": 95,
     "deductions": [
-      {"condition": "<name>", "severity": "<Mild|Moderate|Severe>", "penalty": <positive_integer>},
-      {"condition": "<name>", "severity": "<Mild|Moderate|Severe>", "penalty": <positive_integer>},
-      {"condition": "<name>", "severity": "<Mild|Moderate|Severe>", "penalty": <positive_integer>}
+      {{"condition": "<name>", "severity": "<Mild|Moderate|Severe>", "penalty": <positive_integer>}}
     ],
     "final_score": <95 minus sum of penalties, minimum 10>
-  }
-}
+  }}
+}}
 
 HARD CONSTRAINTS:
 1. checked_area keys MUST be from: """ + ", ".join(CHECKED_AREA_KEYS) + """
 2. detected_condition names MUST be from: """ + "{conditions_str}" + """
 3. Return exactly 5 checked_area items: the 3 lowest-scoring (worst) and 2 highest-scoring (best).
-4. Return exactly 3 detected_condition items.
+4. Return 2 to 5 detected_condition items (minimum 2, maximum 5 — based on what you OBSERVE).
 5. penalty values in score_breakdown are POSITIVE integers from the PENALTY TABLE.
 6. final_score = 95 − sum(penalties), minimum 10.
 7. overall_score MUST equal final_score.
@@ -332,7 +335,11 @@ HARD CONSTRAINTS:
 9. Coordinate values in regions are floats 0.0-1.0, relative to the first image.
 """
 
-    user_prompt = schema_template.replace("{conditions_str}", conditions_str)
+    user_prompt = (
+        schema_template
+        .replace("{conditions_str}", conditions_str)
+        .replace("{yolo_context}", yolo_context)
+    )
 
     # ── Build content blocks (all images + text) ──────────────────────────────
     content = []
@@ -350,8 +357,8 @@ HARD CONSTRAINTS:
     # ── API call ──────────────────────────────────────────────────────────────
     response = client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=2500,
-        temperature=0.5,   # slight variability → different skin states → different scores
+        max_tokens=3000,   # increased to support up to 5 detected conditions
+        temperature=0.3,   # lower temperature → more consistent, evidence-based classification
         system=system_prompt,
         messages=[{"role": "user", "content": content}],
     )

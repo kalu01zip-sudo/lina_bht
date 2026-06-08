@@ -192,9 +192,40 @@ async def upload_face_images(
     # Fetch allowed conditions dynamically
     allowed_conditions = fetch_all_detected_conditions()
 
-    # Call Claude 
+    # ── PRE-SCAN: Run local models BEFORE Claude to gather condition hints ────
+    yolo_hints: list[str] = []
+    pre_scan_acne_regions: list[dict] = []
+    pre_scan_lesion_regions: list[dict] = []
+
     try:
-        ai_data = await analyze_face_with_claude(valid_images, allowed_conditions)
+        from app.services.acne_detection import detect_acne_regions, detect_lesion_regions
+        from app.services.skin_signals import get_specialized_model_hints
+
+        # Run YOLO on the first image (fastest, most frontal)
+        pre_scan_acne_regions = await asyncio.to_thread(detect_acne_regions, valid_images[0])
+        if len(pre_scan_acne_regions) >= 2:
+            yolo_hints.append(f"acne (YOLO detected {len(pre_scan_acne_regions)} acne lesions with high confidence)")
+            print(f"[PRE-SCAN] YOLO acne detected: {len(pre_scan_acne_regions)} regions")
+
+        pre_scan_lesion_regions = await asyncio.to_thread(detect_lesion_regions, valid_images[0])
+        lesion_names = {det.get("class_name", "").lower() for det in pre_scan_lesion_regions}
+        if "blackhead" in lesion_names or "comedone" in lesion_names:
+            yolo_hints.append(f"blackheads (YOLO lesion model detected {len(pre_scan_lesion_regions)} lesions)")
+        if "whitehead" in lesion_names:
+            yolo_hints.append(f"whiteheads (YOLO lesion model detected whiteheads)")
+
+        # Run specialized signal models for condition hints
+        specialized_hints = await asyncio.to_thread(get_specialized_model_hints, valid_images[0])
+        yolo_hints.extend(specialized_hints)
+        if specialized_hints:
+            print(f"[PRE-SCAN] Specialized model hints: {specialized_hints}")
+
+    except Exception as exc:
+        print(f"[PRE-SCAN] Non-fatal pre-scan error: {exc}")
+
+    # Call Claude (with pre-scan hints injected into the prompt)
+    try:
+        ai_data = await analyze_face_with_claude(valid_images, allowed_conditions, yolo_hints=yolo_hints)
     except Exception as e:
         print("AI ERROR:", str(e))
         raise HTTPException(500, f"AI failed: {str(e)}")
@@ -235,6 +266,65 @@ async def upload_face_images(
 
     # Attach raw model scores for transparency
     ai_data["model_scores"] = model_scores
+
+    # ── POST-CLAUDE: inject YOLO-confirmed conditions Claude may have missed ──
+    # If YOLO found acne with high confidence but Claude didn't include it,
+    # inject it directly so it doesn't get dropped.
+    try:
+        existing_condition_names = {
+            c.get("name", "").lower().replace(" ", "_")
+            for c in ai_data.get("detected_condition", [])
+            if isinstance(c, dict)
+        }
+
+        # Acne injection: if YOLO found >= 3 acne regions but Claude missed it
+        if len(pre_scan_acne_regions) >= 3 and "acne" not in existing_condition_names:
+            severity = "Moderate" if len(pre_scan_acne_regions) >= 6 else "Mild"
+            injected_acne = {
+                "name": "acne",
+                "note": f"YOLO model detected {len(pre_scan_acne_regions)} active acne lesions on face.",
+                "severity": severity,
+                "regions": [
+                    {"x": r["x"], "y": r["y"], "width": r["width"], "height": r["height"]}
+                    for r in pre_scan_acne_regions[:5]  # cap at 5 regions
+                ],
+                "image_url": None,
+            }
+            ai_data["detected_condition"].append(injected_acne)
+            print(f"[POST-CLAUDE] Injected 'acne' condition from YOLO ({len(pre_scan_acne_regions)} regions)")
+
+        # Lesion injection: blackheads/whiteheads
+        if pre_scan_lesion_regions:
+            lesion_class_map = {}
+            for det in pre_scan_lesion_regions:
+                cname = det.get("class_name", "").lower()
+                lesion_class_map.setdefault(cname, []).append(det)
+
+            for raw_cls, dets in lesion_class_map.items():
+                # Normalize YOLO class names → system condition names
+                if "blackhead" in raw_cls or "comedone" in raw_cls:
+                    target = "blackheads"
+                elif "whitehead" in raw_cls:
+                    target = "whiteheads"
+                else:
+                    continue
+
+                if target not in existing_condition_names and len(dets) >= 2:
+                    injected_lesion = {
+                        "name": target,
+                        "note": f"YOLO lesion model detected {len(dets)} {target} on face.",
+                        "severity": "Mild" if len(dets) < 5 else "Moderate",
+                        "regions": [
+                            {"x": r["x"], "y": r["y"], "width": r["width"], "height": r["height"]}
+                            for r in dets[:5]
+                        ],
+                        "image_url": None,
+                    }
+                    ai_data["detected_condition"].append(injected_lesion)
+                    print(f"[POST-CLAUDE] Injected '{target}' condition from YOLO lesion model")
+
+    except Exception as exc:
+        print(f"[POST-CLAUDE] Non-fatal injection error: {exc}")
 
     # Assign/reassign phase field based on final blended checked_area scores
     ai_data = _assign_condition_phases(ai_data)

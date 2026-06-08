@@ -166,3 +166,196 @@ def predict_skin_signals(image_bytes: bytes) -> dict[str, float]:
     except Exception as exc:
         logger.error("Error predicting skin signals: %s", exc)
         return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Specialized single-signal models
+# These load hydration_best.pt, elasticity_best.pt, structure_best.pt
+# and map their 0-100 scores to condition hints for the Claude prompt.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_HYDRATION_MODEL_PATH  = Path("app/models/hydration_best.pt")
+_ELASTICITY_MODEL_PATH = Path("app/models/elasticity_best.pt")
+_STRUCTURE_MODEL_PATH  = Path("app/models/structure_best.pt")
+
+_hydration_model  = None
+_elasticity_model = None
+_structure_model  = None
+
+
+class _SingleHeadEfficientNet:
+    """EfficientNet-B0 backbone with a single regression head (0-1 sigmoid output)."""
+
+    def __init__(self, nn, timm):
+        import torch.nn as _nn
+        self.backbone = timm.create_model(
+            "efficientnet_b0", pretrained=False, num_classes=0
+        )
+        self.head = _nn.Sequential(
+            _nn.Linear(1280, 256),
+            _nn.ReLU(),
+            _nn.Dropout(0.3),
+            _nn.Linear(256, 64),
+            _nn.ReLU(),
+            _nn.Linear(64, 1),
+        )
+
+    def __call__(self, x):
+        import torch
+        features = self.backbone(x)
+        return torch.sigmoid(self.head(features))
+
+
+def _load_specialized_model(model_path: Path, head_index: int = 0):
+    """
+    Load a specialized single-signal model from `model_path`.
+
+    Strategy:
+    1. Try to load as a plain state_dict for SingleHeadEfficientNet.
+    2. If key mismatch, try loading into the MultiHeadEfficientNet and
+       extract the relevant head output at inference time.
+    Falls back gracefully to None if loading fails entirely.
+    """
+    import torch
+    import torch.nn as nn
+
+    try:
+        import timm
+    except ImportError:
+        logger.warning("timm not installed — specialized models unavailable")
+        return None, "none"
+
+    state_dict = torch.load(str(model_path), map_location="cpu", weights_only=False)
+
+    # ── Attempt 1: try loading as single-head model ───────────────────────────
+    try:
+        model_obj = _SingleHeadEfficientNet(nn, timm)
+
+        # Build a temporary nn.Module wrapper so we can call load_state_dict
+        class _Wrapper(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.backbone = model_obj.backbone
+                self.head = model_obj.head
+
+            def forward(self, x):
+                import torch as _t
+                return _t.sigmoid(self.head(self.backbone(x)))
+
+        wrapper = _Wrapper()
+        wrapper.load_state_dict(state_dict, strict=True)
+        wrapper.eval()
+        logger.info("Loaded %s as SingleHead model", model_path.name)
+        return wrapper, "single"
+    except Exception:
+        pass
+
+    # ── Attempt 2: fall back to MultiHead model, use head at head_index ───────
+    try:
+        from app.services.skin_signals import _build_model as _build_multi
+        multi = _build_multi()
+        multi.load_state_dict(state_dict, strict=True)
+        multi.eval()
+        logger.info("Loaded %s as MultiHead model (head %d)", model_path.name, head_index)
+        return (multi, head_index), "multi"
+    except Exception as exc:
+        logger.error("Failed to load %s: %s", model_path.name, exc)
+        return None, "none"
+
+
+def _predict_specialized(model_info, image_bytes: bytes) -> float | None:
+    """
+    Run a specialized model on image_bytes.
+    model_info is either (model, 'single') or ((multi_model, head_idx), 'multi').
+    Returns a 0–100 float or None on failure.
+    """
+    try:
+        import torch
+        tensor = torch.from_numpy(_preprocess_image(image_bytes)).unsqueeze(0)
+
+        model_obj, mode = model_info
+        with torch.no_grad():
+            if mode == "single":
+                output = model_obj(tensor)
+                score = float(output[0, 0]) * 100.0
+            elif mode == "multi":
+                multi, head_idx = model_obj
+                output = multi(tensor)
+                score = float(output[0, head_idx]) * 100.0
+            else:
+                return None
+        return round(max(0.0, min(100.0, score)), 1)
+    except Exception as exc:
+        logger.error("Specialized model inference error: %s", exc)
+        return None
+
+
+# ── Public predict functions ──────────────────────────────────────────────────
+
+def predict_hydration(image_bytes: bytes) -> float | None:
+    """Predict skin hydration (0-100) using hydration_best.pt. Returns None on failure."""
+    global _hydration_model
+    if _hydration_model is None:
+        _hydration_model = _load_specialized_model(_HYDRATION_MODEL_PATH, head_index=1)
+    return _predict_specialized(_hydration_model, image_bytes)
+
+
+def predict_elasticity(image_bytes: bytes) -> float | None:
+    """Predict skin elasticity (0-100) using elasticity_best.pt. Returns None on failure."""
+    global _elasticity_model
+    if _elasticity_model is None:
+        _elasticity_model = _load_specialized_model(_ELASTICITY_MODEL_PATH, head_index=3)
+    return _predict_specialized(_elasticity_model, image_bytes)
+
+
+def predict_structure(image_bytes: bytes) -> float | None:
+    """Predict skin structure (0-100) using structure_best.pt. Returns None on failure."""
+    global _structure_model
+    if _structure_model is None:
+        _structure_model = _load_specialized_model(_STRUCTURE_MODEL_PATH, head_index=0)
+    return _predict_specialized(_structure_model, image_bytes)
+
+
+def get_specialized_model_hints(image_bytes: bytes) -> list[str]:
+    """
+    Run all 3 specialized models on image_bytes.
+    Returns a list of condition hint strings to pass to Claude as context.
+
+    Thresholds:
+    - hydration  < 35  → suggest 'dryness' or 'dehydration'
+    - elasticity < 40  → suggest 'loss_of_elasticity'
+    - structure  < 35  → suggest 'pores' or 'uneven_tone'
+    """
+    hints: list[str] = []
+
+    try:
+        hydration_score = predict_hydration(image_bytes)
+        if hydration_score is not None:
+            logger.info("[SPECIALIZED] hydration_best score: %.1f", hydration_score)
+            if hydration_score < 35:
+                hints.append("dryness (hydration model score: %.0f/100 — very low)" % hydration_score)
+            elif hydration_score < 50:
+                hints.append("dehydration (hydration model score: %.0f/100 — below normal)" % hydration_score)
+    except Exception as exc:
+        logger.warning("hydration_best.pt inference failed: %s", exc)
+
+    try:
+        elasticity_score = predict_elasticity(image_bytes)
+        if elasticity_score is not None:
+            logger.info("[SPECIALIZED] elasticity_best score: %.1f", elasticity_score)
+            if elasticity_score < 40:
+                hints.append("loss_of_elasticity (elasticity model score: %.0f/100 — below threshold)" % elasticity_score)
+    except Exception as exc:
+        logger.warning("elasticity_best.pt inference failed: %s", exc)
+
+    try:
+        structure_score = predict_structure(image_bytes)
+        if structure_score is not None:
+            logger.info("[SPECIALIZED] structure_best score: %.1f", structure_score)
+            if structure_score < 35:
+                hints.append("pores or uneven_tone (structure model score: %.0f/100 — poor texture)" % structure_score)
+    except Exception as exc:
+        logger.warning("structure_best.pt inference failed: %s", exc)
+
+    return hints
+
