@@ -43,7 +43,6 @@ from app.routers import admin_video
 from app.routers import profile
 from app.routers import support
 from app.routers import legal
-from app.routers import admin_legal
 from app.routers import product_scan
 from app.routers import (
     product_routine,
@@ -163,7 +162,6 @@ app.include_router(admin_ai_config_router)
 
 app.include_router(admin_video.router)
 app.include_router(legal.router)
-app.include_router(admin_legal.router)
 
 
 

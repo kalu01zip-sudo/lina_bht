@@ -269,3 +269,62 @@ async def reload_admin_notification_scheduler(current_admin: CurrentAdmin):
         "message": "Lia notification scheduler reloaded.",
         "settings": get_notification_settings(),
     }
+
+
+@router.patch("/{notification_id}/toggle-read")
+async def toggle_admin_notification_read(
+    notification_id: str,
+    current_admin: CurrentAdmin,
+):
+    """Toggle the is_read status of a generated notification (read <-> unread)."""
+    # 1. Try finding by the UUID string "id"
+    doc = lia_notifications_collection.find_one({"id": notification_id})
+
+    # 2. If not found, try finding by MongoDB "_id" (ObjectId)
+    if not doc:
+        from bson import ObjectId
+        try:
+            doc = lia_notifications_collection.find_one({"_id": ObjectId(notification_id)})
+        except Exception:
+            pass
+
+    if not doc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Notification '{notification_id}' not found.",
+        )
+
+    # 3. Toggle is_read status
+    current_status = doc.get("is_read", False)
+    new_status = not current_status
+
+    lia_notifications_collection.update_one(
+        {"_id": doc["_id"]},
+        {"$set": {"is_read": new_status}}
+    )
+
+    return {
+        "success": True,
+        "message": f"Notification read status toggled to {new_status}.",
+        "notification_id": notification_id,
+        "is_read": new_status,
+    }
+
+
+@router.patch("/read-all")
+async def mark_all_admin_notifications_read(
+    current_admin: CurrentAdmin,
+):
+    """Mark all unread notifications as read."""
+    res = lia_notifications_collection.update_many(
+        {"is_read": False},
+        {"$set": {"is_read": True}}
+    )
+
+    return {
+        "success": True,
+        "message": f"Marked {res.modified_count} notifications as read.",
+        "marked_read": res.modified_count,
+    }
+
+
