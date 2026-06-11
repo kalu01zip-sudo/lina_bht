@@ -30,9 +30,11 @@ async def _generate_and_upload_overlays_scan(
     ai_data: dict,
     user_id: str,
     scan_id: str,
+    pre_scan_acne_regions: list = None,
+    pre_scan_lesion_regions: list = None,
 ) -> dict:
     """
-    Generate overlays for each condition in detected_condition and visible_area.
+    Generate overlays for each condition in detected_condition and visible_area concurrently.
     Uploads them to S3 and populates the image_url fields.
     """
     from app.utils.overlay_utils import generate_condition_overlay, generate_redness_overlay
@@ -40,55 +42,54 @@ async def _generate_and_upload_overlays_scan(
     from app.services.acne_detection import detect_acne_regions, detect_lesion_regions
     import asyncio
 
-    # Conditions that should use the general lesion detector (not acne-specific)
     LESION_CONDITIONS = {"blackheads", "whiteheads", "enlarged pores"}
 
-    # ── Condition overlays ────────────────────────────────────────────────
-    for cond in ai_data.get("detected_condition", []):
-        if isinstance(cond, dict):
-            cond_lower = cond.get("name", "").lower().strip()
+    tasks = []
 
-            # Acne / Pimples → acne-specific YOLO detector
-            if cond_lower == "acne / pimples":
-                try:
-                    local_regions = detect_acne_regions(image_bytes)
-                    if local_regions:
-                        cond["regions"] = local_regions
-                except Exception as exc:
-                    print(f"[ERROR] Local YOLO acne detection failed for condition: {exc}")
+    # Helper function for generating and uploading condition overlays
+    async def process_condition_overlay(cond: dict):
+        cond_lower = cond.get("name", "").lower().strip()
 
-            # Blackheads / Whiteheads / Enlarged Pores → general lesion YOLO detector
-            elif cond_lower in LESION_CONDITIONS:
-                try:
-                    local_regions = detect_lesion_regions(image_bytes)
-                    if local_regions:
-                        cond["regions"] = local_regions
-                except Exception as exc:
-                    print(f"[ERROR] Local YOLO lesion detection failed for '{cond_lower}': {exc}")
+        # Acne / Pimples → acne-specific YOLO detector (run with SAHI on thread)
+        if cond_lower == "acne / pimples":
+            try:
+                local_regions = await asyncio.to_thread(detect_acne_regions, image_bytes, True)
+                if local_regions:
+                    cond["regions"] = local_regions
+            except Exception as exc:
+                print(f"[ERROR] Local YOLO acne detection failed for condition: {exc}")
 
-            if cond.get("regions"):
-                try:
-                    overlay_bytes = await asyncio.to_thread(
-                        generate_condition_overlay,
-                        image_bytes,
-                        cond["name"],
-                        cond["regions"],
-                    )
-                    url = await upload_overlay_to_s3(
-                        overlay_bytes, user_id, scan_id, cond["name"],
-                    )
-                    cond["image_url"] = url
-                except Exception as exc:
-                    print(f"[ERROR] Overlay failed for '{cond.get('name')}': {exc}")
+        # Blackheads / Whiteheads / Enlarged Pores → general lesion YOLO detector (run with SAHI on thread)
+        elif cond_lower in LESION_CONDITIONS:
+            try:
+                local_regions = await asyncio.to_thread(detect_lesion_regions, image_bytes, True)
+                if local_regions:
+                    cond["regions"] = local_regions
+            except Exception as exc:
+                print(f"[ERROR] Local YOLO lesion detection failed for '{cond_lower}': {exc}")
 
-    # ── Redness / Acne overlay (visible_area) ────────────────────────────
-    va = ai_data.get("visible_area")
-    if isinstance(va, dict):
+        if cond.get("regions"):
+            try:
+                overlay_bytes = await asyncio.to_thread(
+                    generate_condition_overlay,
+                    image_bytes,
+                    cond["name"],
+                    cond["regions"],
+                )
+                url = await upload_overlay_to_s3(
+                    overlay_bytes, user_id, scan_id, cond["name"],
+                )
+                cond["image_url"] = url
+            except Exception as exc:
+                print(f"[ERROR] Overlay failed for '{cond.get('name')}': {exc}")
+
+    # Helper function for generating and uploading visible area overlays
+    async def process_visible_area_overlay(va: dict):
         cond_name = va.get("condition", "Redness")
-        # If the visible area is acne / pimple, run the local YOLO detector to override regions
+        # If the visible area is acne / pimple, run the local YOLO detector (run with SAHI on thread)
         if cond_name.lower() in ("acne", "pimple"):
             try:
-                local_regions = detect_acne_regions(image_bytes)
+                local_regions = await asyncio.to_thread(detect_acne_regions, image_bytes, True)
                 if local_regions:
                     va["regions"] = local_regions
             except Exception as exc:
@@ -116,6 +117,20 @@ async def _generate_and_upload_overlays_scan(
                 va["image_url"] = url
             except Exception as exc:
                 print(f"[ERROR] Area overlay failed for '{va.get('condition')}': {exc}")
+
+    # Add condition overlay tasks
+    for cond in ai_data.get("detected_condition", []):
+        if isinstance(cond, dict):
+            tasks.append(process_condition_overlay(cond))
+
+    # Add visible area overlay task
+    va = ai_data.get("visible_area")
+    if isinstance(va, dict):
+        tasks.append(process_visible_area_overlay(va))
+
+    # Execute all overlay tasks concurrently
+    if tasks:
+        await asyncio.gather(*tasks)
 
     return ai_data
 
@@ -182,12 +197,10 @@ async def upload_face_images(
         raise HTTPException(500, f"Identity check failed: {str(e)}")
     # ──────────────────────────────────────────────────────────────────────
     
-    uploaded_image_urls = []
-
-    for img in valid_images:   
-        url = await upload_scan_image(img, str(current_user["_id"]))
-        if url:
-            uploaded_image_urls.append(url)
+    # Upload all 5 images concurrently to S3 to save network wait time
+    upload_tasks = [upload_scan_image(img, str(current_user["_id"]), optimise=False) for img in valid_images]
+    uploaded_urls = await asyncio.gather(*upload_tasks)
+    uploaded_image_urls = [url for url in uploaded_urls if url]
 
     # Fetch allowed conditions dynamically
     allowed_conditions = fetch_all_detected_conditions()
@@ -198,30 +211,38 @@ async def upload_face_images(
     pre_scan_lesion_regions: list[dict] = []
 
     try:
-        from app.services.acne_detection import detect_acne_regions, detect_lesion_regions
-        from app.services.skin_signals import get_specialized_model_hints
+        from app.services.acne_detection import detect_face_regions_combined
+        from app.services.skin_signals import get_specialized_model_hints, predict_skin_signals
 
-        # Run YOLO on the first image (fastest, most frontal)
-        pre_scan_acne_regions = await asyncio.to_thread(detect_acne_regions, valid_images[0])
+        # Run unified skin signals model first (used for hints and cached for later)
+        skin_signals_scores = await asyncio.to_thread(predict_skin_signals, valid_images[0])
+        if skin_signals_scores:
+            print(f"[PRE-SCAN] Skin signals scores predicted: {skin_signals_scores}")
+            specialized_hints = get_specialized_model_hints(valid_images[0], scores=skin_signals_scores)
+            yolo_hints.extend(specialized_hints)
+            if specialized_hints:
+                print(f"[PRE-SCAN] Specialized model hints: {specialized_hints}")
+        else:
+            skin_signals_scores = {}
+
+        # Run YOLO combined on the first image without SAHI (super fast, ~0.6s)
+        pre_scan_acne_regions, pre_scan_lesion_regions = await asyncio.to_thread(
+            detect_face_regions_combined, valid_images[0], False
+        )
+        
         if len(pre_scan_acne_regions) >= 2:
             yolo_hints.append(f"acne (YOLO detected {len(pre_scan_acne_regions)} acne lesions with high confidence)")
             print(f"[PRE-SCAN] YOLO acne detected: {len(pre_scan_acne_regions)} regions")
 
-        pre_scan_lesion_regions = await asyncio.to_thread(detect_lesion_regions, valid_images[0])
         lesion_names = {det.get("class_name", "").lower() for det in pre_scan_lesion_regions}
         if "blackhead" in lesion_names or "comedone" in lesion_names:
             yolo_hints.append(f"blackheads (YOLO lesion model detected {len(pre_scan_lesion_regions)} lesions)")
         if "whitehead" in lesion_names:
             yolo_hints.append(f"whiteheads (YOLO lesion model detected whiteheads)")
 
-        # Run specialized signal models for condition hints
-        specialized_hints = await asyncio.to_thread(get_specialized_model_hints, valid_images[0])
-        yolo_hints.extend(specialized_hints)
-        if specialized_hints:
-            print(f"[PRE-SCAN] Specialized model hints: {specialized_hints}")
-
     except Exception as exc:
         print(f"[PRE-SCAN] Non-fatal pre-scan error: {exc}")
+        skin_signals_scores = {}
 
     # Call Claude (with pre-scan hints injected into the prompt)
     try:
@@ -231,12 +252,10 @@ async def upload_face_images(
         raise HTTPException(500, f"AI failed: {str(e)}")
 
     # ── Run local skin signals model for validated scores ─────────────────
-    model_scores: dict = {}
+    model_scores: dict = skin_signals_scores
     try:
-        from app.services.skin_signals import predict_skin_signals
-        model_scores = await asyncio.to_thread(predict_skin_signals, valid_images[0])
         if model_scores:
-            print(f"[SKIN SIGNALS] Local model scores: {model_scores}")
+            print(f"[SKIN SIGNALS] Blending local model scores: {model_scores}")
             # Blend local model scores into checked_area (70% model, 30% Claude)
             checked = ai_data.get("checked_area", {})
             BLEND_MAP = {
@@ -379,7 +398,12 @@ async def upload_face_images(
     if scan_id and valid_images:
         try:
             ai_data = await _generate_and_upload_overlays_scan(
-                valid_images[0], ai_data, str(current_user["_id"]), scan_id
+                valid_images[0],
+                ai_data,
+                str(current_user["_id"]),
+                scan_id,
+                pre_scan_acne_regions=pre_scan_acne_regions,
+                pre_scan_lesion_regions=pre_scan_lesion_regions,
             )
             from app.core.mongo_client import scan_collection
             from bson import ObjectId

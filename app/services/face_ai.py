@@ -136,12 +136,9 @@ async def analyze_face_with_claude(
     Returns a structured dict with overall_score, checked_area, detected_condition, etc.
     overall_score is always recalculated server-side from score_breakdown.
     """
-    # ── Image optimisation ────────────────────────────────────────────────────
-    optimised_images = []
-    for img in images:
-        opt_bytes, _ = optimise_image(img, "image/jpeg", max_px=720)
-        optimised_images.append(opt_bytes)
-    encoded_images = [base64.b64encode(img).decode("utf-8") for img in optimised_images]
+    # ── Image base64 encoding ─────────────────────────────────────────────────
+    # Images are already optimised in scan.py before calling this service.
+    encoded_images = [base64.b64encode(img).decode("utf-8") for img in images]
 
     # ── Allowed conditions ────────────────────────────────────────────────────
     if not allowed_conditions:
@@ -591,11 +588,8 @@ async def verify_same_person(images: list[bytes]) -> dict:
     Pre-flight check: confirm all 5 uploaded face images show the same person.
     Uses a lower-resolution optimised image to keep latency low.
     """
-    optimised = []
-    for img in images:
-        opt_bytes, _ = optimise_image(img, "image/jpeg", max_px=512)
-        optimised.append(opt_bytes)
-    encoded = [base64.b64encode(img).decode("utf-8") for img in optimised]
+    # Images are already optimised in scan.py before calling this service.
+    encoded = [base64.b64encode(img).decode("utf-8") for img in images]
 
     system_prompt = """\
 You are an AI tasked with verifying if all provided images show the same person.

@@ -2,10 +2,11 @@ import uuid
 from app.core.s3_client import upload_file_to_s3
 from app.utils.image_utils import optimise_image
 
-async def upload_scan_image(file_bytes: bytes, user_id: str):
+async def upload_scan_image(file_bytes: bytes, user_id: str, optimise: bool = True):
     try:
         # Optimise before upload
-        file_bytes, _ = optimise_image(file_bytes, "image/jpeg")
+        if optimise:
+            file_bytes, _ = optimise_image(file_bytes, "image/jpeg")
 
         file_name = f"scan/{user_id}/{uuid.uuid4()}.jpg"
 

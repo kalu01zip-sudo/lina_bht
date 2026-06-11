@@ -316,46 +316,39 @@ def predict_structure(image_bytes: bytes) -> float | None:
     return _predict_specialized(_structure_model, image_bytes)
 
 
-def get_specialized_model_hints(image_bytes: bytes) -> list[str]:
+def get_specialized_model_hints(image_bytes: bytes, scores: dict = None) -> list[str]:
     """
-    Run all 3 specialized models on image_bytes.
-    Returns a list of condition hint strings to pass to Claude as context.
-
-    Thresholds:
-    - hydration  < 35  → suggest 'dryness' or 'dehydration'
-    - elasticity < 40  → suggest 'loss_of_elasticity'
-    - structure  < 35  → suggest 'pores' or 'uneven_tone'
+    Run the unified skin signals model on image_bytes and map its 0-100 scores to condition hints for the Claude prompt.
+    If scores is already provided, uses them to avoid duplicate inference.
     """
     hints: list[str] = []
 
     try:
-        hydration_score = predict_hydration(image_bytes)
-        if hydration_score is not None:
-            logger.info("[SPECIALIZED] hydration_best score: %.1f", hydration_score)
-            if hydration_score < 35:
-                hints.append("dryness (hydration model score: %.0f/100 — very low)" % hydration_score)
-            elif hydration_score < 50:
-                hints.append("dehydration (hydration model score: %.0f/100 — below normal)" % hydration_score)
-    except Exception as exc:
-        logger.warning("hydration_best.pt inference failed: %s", exc)
+        if scores is None:
+            scores = predict_skin_signals(image_bytes)
+        
+        if scores:
+            hydration_score = scores.get("hydration")
+            if hydration_score is not None:
+                logger.info("[SPECIALIZED] hydration score: %.1f", hydration_score)
+                if hydration_score < 35:
+                    hints.append("dryness (hydration model score: %.0f/100 — very low)" % hydration_score)
+                elif hydration_score < 50:
+                    hints.append("dehydration (hydration model score: %.0f/100 — below normal)" % hydration_score)
 
-    try:
-        elasticity_score = predict_elasticity(image_bytes)
-        if elasticity_score is not None:
-            logger.info("[SPECIALIZED] elasticity_best score: %.1f", elasticity_score)
-            if elasticity_score < 40:
-                hints.append("loss_of_elasticity (elasticity model score: %.0f/100 — below threshold)" % elasticity_score)
-    except Exception as exc:
-        logger.warning("elasticity_best.pt inference failed: %s", exc)
+            elasticity_score = scores.get("elasticity")
+            if elasticity_score is not None:
+                logger.info("[SPECIALIZED] elasticity score: %.1f", elasticity_score)
+                if elasticity_score < 40:
+                    hints.append("loss_of_elasticity (elasticity model score: %.0f/100 — below threshold)" % elasticity_score)
 
-    try:
-        structure_score = predict_structure(image_bytes)
-        if structure_score is not None:
-            logger.info("[SPECIALIZED] structure_best score: %.1f", structure_score)
-            if structure_score < 35:
-                hints.append("pores or uneven_tone (structure model score: %.0f/100 — poor texture)" % structure_score)
+            structure_score = scores.get("structure")
+            if structure_score is not None:
+                logger.info("[SPECIALIZED] structure score: %.1f", structure_score)
+                if structure_score < 35:
+                    hints.append("pores or uneven_tone (structure model score: %.0f/100 — poor texture)" % structure_score)
     except Exception as exc:
-        logger.warning("structure_best.pt inference failed: %s", exc)
+        logger.warning("Skin signals model hints generation failed: %s", exc)
 
     return hints
 
