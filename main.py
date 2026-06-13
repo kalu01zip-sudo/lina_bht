@@ -26,7 +26,8 @@ from app.routers.chat               import router as chat_router
 from app.routers import lia
 # from app.routers.routine            import router as routine_router
 from app.routers.scan_barcode_check import router as scan_barcode_check_router
-from app.routers.admin_auth         import router as admin_auth_router
+from app.routers.admin_auth import router as admin_auth_router
+from app.routers.admin_profile import router as admin_profile_router
 from app.routers.admin_home         import router as admin_home_router
 # from app.routers.admin_products      import router as admin_products_router      
 from app.routers.admin_subscription  import router as admin_subscription_router  
@@ -143,6 +144,7 @@ app.include_router(lia.router)
 # app.include_router(routine_router)
 # app.include_router(scan_barcode_check_router)
 app.include_router(admin_auth_router)  
+app.include_router(admin_profile_router)
 app.include_router(admin.router)        
 app.include_router(admin_home_router)          
 # app.include_router(admin_products_router)      
