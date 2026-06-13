@@ -169,6 +169,7 @@ def _fmt_admin(admin: dict) -> dict:
         "id":         str(admin["_id"]),
         "email":      admin.get("email", ""),
         "full_name":  admin.get("full_name"),
+        "avatar_url": admin.get("avatar_url"),
         "is_active":  admin.get("is_active", True),
         "created_at": admin.get("created_at", datetime.utcnow()).isoformat(),
         "last_login_at": (
