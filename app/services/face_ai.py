@@ -126,28 +126,65 @@ def _build_penalty_table_text() -> str:
 
 # ── Main analysis function ────────────────────────────────────────────────────
 
-async def analyze_face_with_claude(
-    images: list[bytes],
-    allowed_conditions: list[str] | None = None,
-    yolo_hints: list[str] | None = None,
+async def detect_front_facing_image(images: list[bytes]) -> int:
+    """
+    Given a list of face images, returns the index (0-based) of the most 
+    front-facing image, ideal for YouCam HD skin analysis.
+    """
+    encoded = [base64.b64encode(img).decode("utf-8") for img in images]
+
+    system_prompt = """\
+You are an AI tasked with selecting the most front-facing image from a provided set.
+You will be given multiple images. You must return ONLY the 0-based integer index of the image that is the most perfectly front-facing, straight-on view of the face.
+If multiple images are front-facing, pick the clearest one.
+Return ONLY a JSON object: {"front_facing_index": <integer>} - no markdown, no explanation.
+"""
+    user_prompt = "Which of these images is the best front-facing selfie? Return the index (0-based)."
+
+    content = []
+    for i, img in enumerate(encoded):
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": img},
+        })
+    content.append({"type": "text", "text": user_prompt})
+
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=100,
+            temperature=0,
+            system=system_prompt,
+            messages=[{"role": "user", "content": content}],
+        )
+
+        raw_text = "".join(
+            block.text for block in response.content if hasattr(block, "text")
+        )
+        clean_json = extract_json(raw_text)
+        if clean_json:
+            result = json.loads(clean_json)
+            return result.get("front_facing_index", 0)
+        return 0
+    except Exception as exc:
+        print(f"[ERROR] CLAUDE FRONT-FACING DETECTION ERROR: {exc}")
+        return 0
+
+
+async def generate_narrative_from_youcam(
+    youcam_data: dict,
+    allowed_conditions: list[str] | None = None
 ) -> dict:
     """
-    Analyse up to 5 face images with Claude vision.
-    Returns a structured dict with overall_score, checked_area, detected_condition, etc.
-    overall_score is always recalculated server-side from score_breakdown.
+    Generates the final structured JSON (with clinical notes, prognosis, etc.)
+    by feeding the YouCam scores to Claude (TEXT ONLY).
     """
-    # ── Image base64 encoding ─────────────────────────────────────────────────
-    # Images are already optimised in scan.py before calling this service.
-    encoded_images = [base64.b64encode(img).decode("utf-8") for img in images]
-
-    # ── Allowed conditions ────────────────────────────────────────────────────
     if not allowed_conditions:
         allowed_conditions = DEFAULT_ALLOWED_CONDITIONS
     conditions_str = ", ".join(allowed_conditions)
 
     penalty_table_text = _build_penalty_table_text()
 
-    # ── System prompt ─────────────────────────────────────────────────────────
     system_prompt = f"""\
 You are a highly critical, precise clinical dermatology AI system — an expert \
 board-certified dermatologist specialising in skin health and aesthetics.
@@ -156,13 +193,11 @@ board-certified dermatologist specialising in skin health and aesthetics.
 GOLDEN RULES
 ════════════════════════════════════════════════════
 1. Return ONLY valid JSON — zero markdown, zero explanation.
-2. Every score (0-100) must be derived from what you OBSERVE in the images.
-   Perfect skin scores 90-95. Never output a static or "default" score.
-3. Scores MUST differ between images with different conditions.
-4. You have multiple face images for a 360° assessment — use all angles.
+2. You are provided with objective skin scores from YouCam AI (where higher is better).
+3. Use these provided scores to formulate the checked_area health scores and write clinical notes for the detected conditions.
 
 ════════════════════════════════════════════════════
-SCORING ALGORITHM  (follow exactly)
+SCORING ALGORITHM (Follow exactly)
 ════════════════════════════════════════════════════
 Baseline = {SCORE_BASELINE}
 For each detected_condition subtract its penalty (positive integer) from the baseline.
@@ -171,93 +206,26 @@ overall_score = MAX({SCORE_MIN}, {SCORE_BASELINE} − penalty_1 − penalty_2 �
 PENALTY TABLE (penalties are positive integers):
 {penalty_table_text}
 For any condition not in this table, estimate: Mild=5, Moderate=12, Severe=22.
-
-SEVERITY → EXPECTED SCORE RANGE:
-• All Mild       → overall_score 70-89
-• Any Moderate   → overall_score 55-74
-• Any Severe     → overall_score 10-54
-
-════════════════════════════════════════════════════
-CHECKED AREA SCORING
-════════════════════════════════════════════════════
-Health score 0-100 per area (100 = perfectly healthy):
-• Active acne pustules visible      → acne       : Mild 35-55, Moderate 12-35, Severe 0-12
-• Blackheads clearly visible        → blackheads : Mild 35-55, Moderate 12-35, Severe 0-12
-• Oiliness / grease / shine         → sebum      : Mild 35-55, Moderate 12-35, Severe 0-12
-• Dryness / flaking / tight skin    → dryness    : Mild 35-55, Moderate 12-35, Severe 0-12
-• Redness / erythema visible        → redness    : Mild 35-55, Moderate 12-35, Severe 0-12
-• Pigmentation / dark spots visible → pigmentation: Mild 40-60, Moderate 15-40, Severe 0-15
-• Visible wrinkles                  → wrinkles   : Mild 40-65, Moderate 15-40, Severe 0-15
-• No visible issue in an area       → that area scores 72-95
-The 3 most problematic areas MUST score lower than the 2 healthiest areas.
-
-════════════════════════════════════════════════════
-HYDRATION
-════════════════════════════════════════════════════
-Estimate skin hydration (0-100) from visual cues:
-• Visibly tight, flaky, ashy skin → 10-35
-• Slightly dry but not flaking    → 36-55
-• Normal, balanced moisture       → 56-74
-• Plump, dewy, well-hydrated      → 75-95
-
-hydration_target = recommended daily water intake in ml (1500-3500).
-
-════════════════════════════════════════════════════
-PROGNOSIS TIMELINE
-════════════════════════════════════════════════════
-Show the expected CHANGE in score (delta), not the final score.
-Positive delta = improvement. Negative delta = worsening.
-
-════════════════════════════════════════════════════
-LIFESTYLE FACTORS
-════════════════════════════════════════════════════
-• stress_score:   100 = extreme stress signs visible (inflammation, breakouts)
-• water_intake:   100 = excellent hydration visible
-• sleep_quality:  100 = well-rested skin visible (no puffiness, no dark circles)
-
-════════════════════════════════════════════════════
-REGION COORDINATE RULES
-════════════════════════════════════════════════════
-• x, y = top-left corner of the bounding box, normalised 0.0–1.0.
-• width, height = size of the bounding box, normalised 0.0–1.0.
-• Coordinates are relative to the FIRST image provided (Face image 1).
-• Return at least 1 region per detected condition if the area is localisable.
-• For diffuse conditions (redness, oiliness, uneven skin tone, dullness), return larger boxes.
-• If a condition is not localisable, return an empty regions array [].
 """
 
-    # ── Build YOLO context hint (if provided) ────────────────────────────────
-    yolo_context = ""
-    if yolo_hints:
-        yolo_context = (
-            f"\n\n⚠️ LOCAL MODEL PRE-SCAN RESULTS (high confidence — include these in detected_condition):\n"
-            + "\n".join(f"  • {h}" for h in yolo_hints)
-            + "\n\nYou MUST include any condition listed above in your detected_condition output if visually confirmable."
-        )
-
-    # ── User prompt ───────────────────────────────────────────────────────────
     schema_template = """\
-Analyse all provided face images carefully using every angle. Observe: acne, \
-blackheads, whiteheads, oiliness, dryness, redness, pigmentation, dark spots, \
-fine lines, wrinkles, pore size, skin texture, tone evenness, hydration level, \
-under-eye area, and overall skin radiance.
+You are given the following raw skin analysis scores from YouCam:
+{youcam_data}
+
+Based on these scores, generate a comprehensive clinical narrative.
+Translate the YouCam scores into our specific schema.
 
 CRITICAL ANTI-BIAS RULES:
-- Do NOT default to 'redness', 'pigmentation', or 'dark_circles' unless clearly, \
-unambiguously visible in the images.
-- 'redness' = visible erythema or flushing. Skin tone variation alone is NOT redness.
-- 'pigmentation' = visible dark spots or uneven tone patches. General skin tone is NOT pigmentation.
-- 'dark_circles' = visible under-eye discoloration. Only include if clearly observable.
-- Pick conditions that are CLINICALLY SPECIFIC and VISIBLE. Be precise, not generic.
+- Pick conditions that are clinically relevant based on the YouCam scores.
+- 0-100 scales: 100 means perfect health.
+- If a YouCam score for a condition is low, include it as a detected condition.
 
 Follow these steps:
-STEP 1 — OBSERVE what is clinically visible across all images with precision.
-STEP 2 — CLASSIFY: pick 2 to 5 conditions ACTUALLY VISIBLE in the images.
-          - Minimum 2, maximum 5. Do NOT pad the list to hit a number.
-          - Only include conditions you can specifically justify with visual evidence.
+STEP 1 — REVIEW the YouCam scores. Check which conditions have valid `mask_urls`.
+STEP 2 — CLASSIFY: pick 5 to 7 detected conditions based on the worst (lowest) YouCam scores.
+CRITICAL RULE FOR STEP 2: You MUST ONLY select conditions that actually have a URL in their `mask_urls` array in the YouCam data. If `mask_urls` is empty, missing, or null, DO NOT select that condition, even if it is severe!
 STEP 3 — SCORE: apply the PENALTY TABLE to compute overall_score.
 STEP 4 — OUTPUT only this JSON (replace placeholder values):
-{yolo_context}
 
 {{
   "overall_score": <integer computed from penalty table>,
@@ -270,25 +238,13 @@ STEP 4 — OUTPUT only this JSON (replace placeholder values):
     "<area_name_5>": <health_score>
   }},
 
-  "visible_area": {{
-    "condition": "<one of: acne|pimple|redness|irritation|pigmentation|dullness>",
-    "areas": ["<one or more of: cheeks|nose|forehead|chin|under_eye>"],
-    "score": <health_score>,
-    "regions": [
-      {{ "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }}
-    ]
-  }},
-
   "hydration": <0-100>,
 
   "detected_condition": [
     {{
       "name": "<condition_name_from_allowed_list>",
-      "note": "<exactly 10-12 word clinical note>",
-      "severity": "<Mild|Moderate|Severe>",
-      "regions": [
-        {{ "x": <float 0-1>, "y": <float 0-1>, "width": <float 0-1>, "height": <float 0-1> }}
-      ]
+      "note": "<exactly 10-12 word clinical note describing the severity based on YouCam score>",
+      "severity": "<Mild|Moderate|Severe>"
     }}
   ],
 
@@ -323,52 +279,32 @@ STEP 4 — OUTPUT only this JSON (replace placeholder values):
 HARD CONSTRAINTS:
 1. checked_area keys MUST be from: """ + ", ".join(CHECKED_AREA_KEYS) + """
 2. detected_condition names MUST be from: """ + "{conditions_str}" + """
-3. Return exactly 5 checked_area items: the 3 lowest-scoring (worst) and 2 highest-scoring (best).
-4. Return 2 to 5 detected_condition items (minimum 2, maximum 5 — based on what you OBSERVE).
+3. Return 5 to 7 checked_area items. You MUST include every condition you selected for `detected_condition` in `checked_area` as well.
+4. Return 5 to 7 detected_condition items (minimum 5, maximum 7). ONLY select conditions that have a valid mask URL in YouCam data.
 5. penalty values in score_breakdown are POSITIVE integers from the PENALTY TABLE.
 6. final_score = 95 − sum(penalties), minimum 10.
 7. overall_score MUST equal final_score.
-8. All score values are integers 0-100. No string values. No explanation outside JSON.
-9. Coordinate values in regions are floats 0.0-1.0, relative to the first image.
+8. All score values are integers 0-100.
 """
 
     user_prompt = (
         schema_template
         .replace("{conditions_str}", conditions_str)
-        .replace("{yolo_context}", yolo_context)
+        .replace("{youcam_data}", json.dumps(youcam_data, indent=2))
     )
 
-    # ── Build content blocks (all images + text) ──────────────────────────────
-    content = []
-    for img in encoded_images:
-        content.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/jpeg",
-                "data": img,
-            },
-        })
-    content.append({"type": "text", "text": user_prompt})
-
-    # ── API call ──────────────────────────────────────────────────────────────
-    response = client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=3000,   # increased to support up to 5 detected conditions
-        temperature=0.3,   # lower temperature → more consistent, evidence-based classification
-        system=system_prompt,
-        messages=[{"role": "user", "content": content}],
-    )
-
-    # ── Parse & post-process ──────────────────────────────────────────────────
     try:
-        raw_text = ""
-        for block in response.content:
-            if hasattr(block, "text"):
-                raw_text += block.text
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=3000,
+            temperature=0.3,
+            system=system_prompt,
+            messages=[{"role": "user", "content": [{"type": "text", "text": user_prompt}]}],
+        )
 
-        if not raw_text:
-            raise ValueError("Empty Claude response")
+        raw_text = "".join(
+            block.text for block in response.content if hasattr(block, "text")
+        )
 
         clean_json = extract_json(raw_text)
         if not clean_json:
@@ -377,29 +313,21 @@ HARD CONSTRAINTS:
         result = json.loads(clean_json)
         result = _enforce_score_consistency(result)
 
-        # Parse and populate regions/image_url for detected conditions
+        # Parse and populate image_url for detected conditions (regions has been removed)
         for cond in result.get("detected_condition", []):
             if isinstance(cond, dict):
-                cond["regions"] = _parse_regions(cond.get("regions", []))
                 cond["image_url"] = None
 
         # Add phase field to each detected_condition
         result = _assign_condition_phases(result)
 
-        # Parse and populate regions/image_url for visible area
-        va = result.get("visible_area")
-        if isinstance(va, dict):
-            va["regions"] = _parse_regions(va.get("regions", []))
-            va["image_url"] = None
-
-        # Initialize model_scores (populated later by local ML models)
         result["model_scores"] = {}
-
         return result
 
     except Exception as exc:
-        print(f"[ERROR] CLAUDE RAW RESPONSE: {response}")
-        raise RuntimeError(f"Face analysis parsing failed: {exc}") from exc
+        print(f"[ERROR] CLAUDE NARRATIVE GENERATION ERROR: {exc}")
+        raise RuntimeError(f"Face narrative parsing failed: {exc}") from exc
+
 
 
 # ── Score consistency enforcer ────────────────────────────────────────────────
