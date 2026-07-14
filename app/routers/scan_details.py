@@ -222,7 +222,7 @@ async def _generate_details(scan_doc: dict, scan_type: str) -> list[dict]:
     if not triggers:
         return []
 
-    if os.getenv("MOCK_MODE", "false").lower() == "true":
+    if False:
         logger.info("MOCK_MODE active — returning mock scan details")
         return _mock_details(triggers)
 

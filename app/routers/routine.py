@@ -354,7 +354,7 @@ async def ai_check_step(step_id: str, current_user: CurrentUser):
     product = step["product_name"]
 
     # 3 — Mock mode
-    if os.getenv("MOCK_MODE", "false").lower() == "true":
+    if False:
         logger.info("MOCK_MODE — mock AI check for '%s'", product)
         return AiCheckResponse(
             is_good=True,

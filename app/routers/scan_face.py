@@ -804,7 +804,7 @@ async def face_scan(
     system_prompt    = _build_personalized_system_prompt(profile)
 
     # ── Mock mode ─────────────────────────────────────────────────────────────
-    if os.getenv("MOCK_MODE", "false").lower() == "true" or not is_vision_available():
+    if not is_vision_available():
         logger.info("MOCK_MODE — face scan for user %s", user_id)
         try:
             scan_id = await _save_face_scan(

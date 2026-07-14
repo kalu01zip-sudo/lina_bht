@@ -470,7 +470,7 @@ async def check_routine(current_user: CurrentUser):
     )
 
     # 6. Mock mode check
-    if os.getenv("MOCK_MODE", "false").lower() == "true":
+    if False:
         # Generate a realistic mock response depending on the profile
         mock_conflicts = []
         mock_allergy_issues = []
@@ -690,4 +690,4 @@ async def check_routine(current_user: CurrentUser):
         raise HTTPException(
             status_code=422,
             detail=f"Failed to parse AI output into schema: {exc}. Raw: {clean}"
-        )
+        )

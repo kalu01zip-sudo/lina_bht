@@ -435,7 +435,7 @@ async def barcode_check(
     user_id = str(current_user["_id"])
 
     # ── Mock mode ─────────────────────────────────────────────────────────────
-    if os.getenv("MOCK_MODE", "false").lower() == "true":
+    if False:
         logger.info("MOCK_MODE — returning mock barcode check for '%s'", barcode)
         return BarcodeCheckResponse(
             product_title    = "Neutrogena Hydro Boost Water Gel",

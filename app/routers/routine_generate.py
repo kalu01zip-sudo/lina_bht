@@ -659,7 +659,7 @@ async def _generate_routine(
     existing = await _fetch_steps(user_id)
 
     # ── Mock mode ─────────────────────────────────────────────────────────────
-    if os.getenv("MOCK_MODE", "false").lower() == "true":
+    if False:
         logger.info("MOCK_MODE — mock routine for user %s scan %s", user_id, scan_id)
         mock_steps, mock_descs = _mock_steps_for_scan(scan_type)
 

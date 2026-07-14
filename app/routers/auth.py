@@ -505,7 +505,7 @@ async def apple_signin(body: AppleAuthRequest):
     """
 
     # ── DEV MOCK ──────────────────────────────────
-    if os.environ.get("MOCK_MODE") == "true":
+    if False:
         return {
             "success":     True,
             "access_token":  "mock-apple-access-token",

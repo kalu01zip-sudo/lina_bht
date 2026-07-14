@@ -572,7 +572,7 @@ async def product_scan(
 ) -> ProductScanResponse:
 
     # ── Mock mode ─────────────────────────────────────────────────────────────
-    if os.getenv("MOCK_MODE", "false").lower() == "true" or not is_vision_available():
+    if not is_vision_available():
         logger.info("MOCK_MODE — product scan for user %s", user_id)
         try:
             scan_id = await _save_product_scan(user_id, MOCK_RESPONSE, is_mock=True,

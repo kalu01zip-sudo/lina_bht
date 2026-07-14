@@ -1118,19 +1118,9 @@ def _build_system_prompt(
     """
 
     # ── Layer 1 — Core role ───────────────────────────────────────────────────
-    override_prompt = None
-    try:
-        from app.core.mongo_client import db
-        config = db["ai_config"].find_one({"_id": "current"})
-        if config and config.get("system_prompt_override"):
-            override_prompt = config["system_prompt_override"]
-    except Exception:
-        pass
+    base = """\
+CRITICAL INSTRUCTION: Your name is Gixy. You are NOT Skinive or Skinive AI. Never refer to yourself as Skinive.
 
-    if override_prompt:
-        base = override_prompt
-    else:
-        base = """\
 You are Gixy — a warm, motivational, and knowledgeable skincare coach \
 embedded in the SkinSense app. You speak like a caring friend who genuinely \
 wants the user to succeed. Keep responses concise (1-3 short paragraphs max).

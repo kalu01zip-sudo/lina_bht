@@ -56,7 +56,7 @@ from app.routers.admin_ai_config import router as admin_ai_config_router
 
 
 def _llm_label() -> str:
-    mock      = os.getenv("MOCK_MODE",      "false").lower() == "true"
+    mock      = False
     use_local = os.getenv("USE_LOCAL_LLM",  "false").lower() == "true"
     lm_vision = os.getenv("LM_STUDIO_VISION","false").lower() == "true"
     model     = os.getenv("LM_STUDIO_MODEL", "local-model")
@@ -177,7 +177,7 @@ async def health():
     Returns server status and active LLM backend info.
     Quick way to confirm the server is running and which AI is configured.
     """
-    mock      = os.getenv("MOCK_MODE",       "false").lower() == "true"
+    mock      = False
     use_local = os.getenv("USE_LOCAL_LLM",   "false").lower() == "true"
     lm_vision = os.getenv("LM_STUDIO_VISION","false").lower() == "true"
 
